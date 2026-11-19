@@ -141,7 +141,22 @@ class PruebasServidor(unittest.TestCase):
             return json.loads(respuesta.read().decode("utf-8"))
 
     def test_health(self) -> None:
-        self.assertTrue(self.pedir("/api/health")["ok"])
+        salud = self.pedir("/api/health")
+        self.assertTrue(salud["ok"])
+        # launcher.py busca esta marca para saber que la cabina ya esta arriba
+        # y no confundirla con otro programa que ocupe el puerto.
+        self.assertEqual(salud.get("app"), "walle-cockpit")
+
+    def test_el_lanzador_reconoce_la_cabina(self) -> None:
+        """El acceso directo del escritorio usa estas dos funciones."""
+        sys.path.insert(0, str(RAIZ))
+        try:
+            import launcher  # noqa: WPS433
+        finally:
+            sys.path.pop(0)
+
+        self.assertTrue(launcher.es_nuestra(self.puerto))
+        self.assertFalse(launcher.puerto_libre(self.puerto))
 
     def test_estado_degradado_sin_dependencias(self) -> None:
         estado = self.pedir("/api/state")

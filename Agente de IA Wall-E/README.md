@@ -13,8 +13,11 @@ del escritorio.
 1. Instalá Python 3.10 o superior desde <https://www.python.org/downloads/> y
    marcá la casilla **"Add python.exe to PATH"**.
 2. Doble clic en **`instalar.bat`**. Crea el entorno, instala lo opcional,
-   corre las 10 pruebas y deja `config.json` listo.
+   corre las 11 pruebas y deja `config.json` listo.
 3. Doble clic en **`WALL-E Asistente IA.bat`**. Abre el navegador solo.
+
+La interfaz viene compilada y el modelo 3D de WALL-E viaja adentro: no hace
+falta Node, ni internet, ni cuenta en ningún lado.
 
 Para dejarlo en el escritorio con el icono de WALL-E:
 
@@ -76,7 +79,20 @@ sigue funcionando con el resto:
 | `pyserial` | No hay control del robot real; queda el modo simulación |
 | `opencv-python` | El panel de cámara queda apagado |
 | `psutil` | Telemetría del sistema en blanco |
-| Piper + modelo `.onnx` | Sin voz; `/api/tts` responde 503 |
+| Piper + modelo `.onnx` | Sin voz de Piper; el navegador lee las respuestas con su propia voz |
+
+## Si algo no arranca
+
+El acceso directo no deja consola, así que todo queda escrito en
+`datos/servidor.log`. Si la cabina no abre, ese archivo dice por qué.
+
+Si el puerto 8765 está ocupado por otro programa, el lanzador usa el primero
+libre entre 8765 y 8774 y abre esa dirección: la interfaz siempre habla con el
+servidor que la sirvió. Arrancar a mano con otro puerto también vale:
+
+```powershell
+python server.py --port 8770
+```
 
 ## API
 
@@ -99,10 +115,10 @@ GET  /api/settings        POST /api/settings     POST /api/shutdown
 python -m unittest -v pruebas_agente
 ```
 
-Diez pruebas, sin red, sin cámara y sin Ollama: importan el cerebro, escriben y
+Once pruebas, sin red, sin cámara y sin Ollama: importan el cerebro, escriben y
 buscan en la memoria SQLite, levantan `server.py` en un puerto libre y hablan
 con la API como lo haría el navegador —incluido el caso de que falte todo— y
-verifican que la interfaz se sirve.
+verifican que la interfaz se sirve y que el lanzador reconoce la cabina.
 
 ## Estructura
 

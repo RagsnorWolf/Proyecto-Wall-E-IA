@@ -520,7 +520,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self._diagnostics()
                 return
             if path == "/api/health":
-                self._json({"ok": True, "version": VERSION})
+                # `app` distingue esta cabina de cualquier otro servidor que
+                # ande en el mismo puerto: launcher.py lo usa para saber si
+                # ya esta levantada o si tiene que arrancar otra instancia.
+                self._json({"ok": True, "app": "walle-cockpit", "version": VERSION})
                 return
         except ValueError as exc:
             self._error(str(exc))
@@ -1183,6 +1186,10 @@ def _detect(frame: Any, color: str) -> dict[str, Any]:
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    # Sin SO_REUSEADDR: en Windows esa opcion deja que dos procesos escuchen el
+    # mismo puerto y las peticiones se reparten al azar entre las dos cabinas.
+    # Preferimos que el segundo bind falle y el lanzador elija otro puerto.
+    allow_reuse_address = False
 
 
 def main() -> None:
@@ -1200,7 +1207,13 @@ def main() -> None:
     threading.Thread(target=boot_agent, daemon=True).start()
     threading.Thread(target=motion_watchdog, daemon=True).start()
 
-    server = Server(("127.0.0.1", args.port), Handler)
+    try:
+        server = Server(("127.0.0.1", args.port), Handler)
+    except OSError as exc:
+        print(f"[error] no pude abrir el puerto {args.port}: {exc}")
+        print("[error] probá otro puerto:  python server.py --port 8766")
+        print("[error] o cerrá el programa que lo está usando.")
+        raise SystemExit(2)
     _server = server
     url = f"http://127.0.0.1:{args.port}"
     print(f"[ok] cabina en {url}")
