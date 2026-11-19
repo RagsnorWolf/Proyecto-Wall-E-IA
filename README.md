@@ -9,6 +9,10 @@ descarga, se instala y se ejecuta sola:
 | `Cerebro Wall-E (Actividad Fisica + PPO) .py/` | Aprendizaje por refuerzo (PPO escrito a mano) | La política que conduce: explora, recoge, entrega |
 | `Agente de IA Wall-E/` | Cabina web: WALL-E en 3D, chat con voz, memoria, cámara y control del robot | La cabeza que decide qué hacer y por qué |
 
+Cada una se baja sola y funciona sola. El Cerebro ya trae `modelo/politica.json`
+entrenado, así que `iniciar.bat` muestra a WALL-E jugando sin esperar un
+entrenamiento; el Agente trae la interfaz compilada y el modelo 3D adentro.
+
 La cadena es simple: **el Simulador presta la física, el Cerebro aprende a moverse
 dentro de ella, y el Agente conversa, recuerda y maneja el robot.**
 

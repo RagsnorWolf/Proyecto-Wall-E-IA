@@ -43,8 +43,7 @@ del /q modelo\prueba.json modelo\prueba.csv 2>nul
 echo.
 echo Listo. Ahora:
 echo   entrenar.bat            entrena la politica ^(60.000 pasos, unos minutos^)
-echo   mirar.bat               abre la ventana con la politica jugando
-echo   iniciar.bat             lo mismo que mirar.bat
+echo   iniciar.bat             abre la ventana con la politica jugando
 pause
 exit /b 0
 

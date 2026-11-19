@@ -42,6 +42,10 @@ python main.py --escenario pasillo
 python main.py --sin-ventana --pasos 500   # prueba headless, sin pygame
 ```
 
+Si falta pygame, `iniciar.bat` lo dice con el comando exacto para instalarlo en
+vez de cerrarse con un error de Python. El motor y el modo `--sin-ventana`
+funcionan igual sin él.
+
 | Tecla | Acción |
 |---|---|
 | Flecha arriba | Avanzar |

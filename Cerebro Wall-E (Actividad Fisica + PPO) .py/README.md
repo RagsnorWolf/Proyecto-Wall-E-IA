@@ -28,7 +28,16 @@ No depende de la carpeta hermana: lleva una copia vendorizada del simulador en
 (está en la raíz del repo). Por eso podés descargar únicamente
 `Cerebro Wall-E (Actividad Fisica + PPO) .py/` y entrenar igual.
 
-La copia se regenera con `python sincronizar.py`; la CI falla si queda viejas.
+La copia se regenera con `python sincronizar.py`; la CI falla si queda vieja.
+
+## Ya viene entrenada
+
+`modelo/politica.json` está en la carpeta: después de `instalar.bat`, `iniciar.bat`
+abre la ventana y la política juega sin entrenar nada. Si querés tu propia
+política, `entrenar.bat` la reemplaza.
+
+Si falta pygame, `iniciar.bat` avisa y sigue sin ventana; `evaluar.py` también
+cae a modo texto en vez de romperse.
 
 ## Entrenar
 
@@ -60,15 +69,15 @@ que termina en un robot dando vueltas para siempre.
 
 | Señal | Valor | Motivo |
 |---|---|---|
-| Celda nueva | +0.25 | Actividad física real, medida en área |
+| Celda nueva | +0.35 | Actividad física real, medida en área |
 | Por metro | +0.02 | Forma suave mientras explora |
-| Recoger cubo | +2.0 | Progreso parcial hacia el objetivo |
-| Entregar cubo | +10.0 | Objetivo cumplido |
-| Limpiar el mapa | +5.0 | Bonus de episodio terminado |
-| Paso | −0.01 | Presión de tiempo |
-| Colisión | −0.15 | Castiga chocar |
+| Recoger cubo | +2.5 | Progreso parcial hacia el objetivo |
+| Entregar cubo | +12.0 | Objetivo cumplido |
+| Limpiar el mapa | +6.0 | Bonus de episodio terminado |
+| Paso | −0.02 | Presión de tiempo |
+| Colisión | −0.35 | Castiga chocar |
 | Batería < 10 % | −0.05/paso | No dejar que se apague |
-| Batería agotada | −5.0 | Episodio fallido |
+| Batería agotada | −6.0 | Episodio fallido |
 
 Están en `cerebro/recompensa.py`, en un solo dataclass `PesosRecompensa`.
 Cambiar el comportamiento del robot es cambiar esos números.

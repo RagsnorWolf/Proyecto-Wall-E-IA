@@ -47,7 +47,14 @@ def headless(escenario: str, pasos: int) -> int:
 
 
 def jugar(escenario: str, semilla: int | None) -> int:
-    import pygame
+    try:
+        import pygame
+    except ImportError:
+        print("[error] falta pygame para abrir la ventana.")
+        print("        Windows:  .\\.venv\\Scripts\\python.exe -m pip install pygame")
+        print("        Cualquier SO:  python -m pip install pygame")
+        print("        Sin ventana tambien se puede:  python main.py --sin-ventana --pasos 200")
+        return 1
 
     from simulador.render import Dibujante, tamano_ventana
 

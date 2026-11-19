@@ -39,6 +39,14 @@ def principal() -> int:
         print(f"[error] no existe {args.modelo}. Entrena primero con entrenar_ppo.py")
         return 1
 
+    if args.ventana:
+        try:
+            import pygame  # noqa: F401
+        except ImportError:
+            print("[aviso] falta pygame: sigo sin ventana.")
+            print("        instalar:  python -m pip install pygame")
+            args.ventana = False
+
     agente = AgentePPO.cargar(args.modelo)
     entorno = EntornoActividad(
         args.escenario, semilla=args.semilla, render_mode="human" if args.ventana else None

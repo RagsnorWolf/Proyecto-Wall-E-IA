@@ -26,9 +26,12 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [2/3] Instalando dependencias ^(pygame para la ventana^) ...
-".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
+".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip >nul 2>nul
 ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
-if errorlevel 1 goto :error
+if errorlevel 1 (
+    echo [AVISO] pygame no se instalo. El motor y la prueba headless andan igual;
+    echo         la ventana queda para cuando puedas instalarlo.
+)
 
 echo [3/3] Comprobando que el motor funciona ^(sin ventana^) ...
 ".venv\Scripts\python.exe" main.py --sin-ventana --pasos 120
