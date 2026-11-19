@@ -1,0 +1,3 @@
+# El simulador no necesita nada para correr.
+# Solo para abrir la ventana:
+pygame>=2.5

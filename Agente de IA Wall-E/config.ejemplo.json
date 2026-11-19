@@ -1,0 +1,18 @@
+{
+  "proveedor": "openai",
+  "base_url": "https://api.openai.com/v1",
+  "modelo": "gpt-4o-mini",
+  "variable_clave": "WALLE_API_KEY",
+  "temperatura": 0.2,
+  "max_tokens": 1200,
+  "tiempo_limite": 60.0,
+  "reintentos": 3,
+  "cuerpo": "simulado",
+  "puerto_serial": "COM5",
+  "baudios": 115200,
+  "escenario": "chatarreria",
+  "modelo_politica": "",
+  "max_turnos": 12,
+  "memoria": "",
+  "idioma": "es"
+}

@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Configuracion local y datos del usuario
+Agente de IA Wall-E/config.json
+Agente de IA Wall-E/datos/
+*.db
+*.db-wal
+*.db-shm
+
+# Artefactos de entrenamiento (el checkpoint si se sube, el CSV no)
+Cerebro Wall-E (Actividad Fisica + PPO) .py/modelo/entrenamiento.csv
+*.tmp
+
+# Editores y sistema
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,42 @@
+name: pruebas
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suites:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Compilar todo
+        run: python -m compileall -q .
+
+      - name: Cerebro (gradiente + entorno)
+        working-directory: "Cerebro Wall-E (Actividad Fisica + PPO) .py"
+        run: python -m unittest -v pruebas
+
+      - name: Agente (bucle con servidor falso)
+        working-directory: "Agente de IA Wall-E"
+        run: python -m unittest -v pruebas_agente
+
+      - name: Simulador headless
+        working-directory: "Simulador Wall-E"
+        run: python main.py --sin-ventana --escenario patio --pasos 200
+
+      - name: Entrenamiento corto de humo
+        working-directory: "Cerebro Wall-E (Actividad Fisica + PPO) .py"
+        run: python entrenar_ppo.py --pasos 1024 --rollout 512 --eval-episodios 1

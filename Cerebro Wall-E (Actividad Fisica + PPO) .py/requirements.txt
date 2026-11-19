@@ -1,0 +1,4 @@
+# Sin dependencias: el PPO, la red y el entorno son biblioteca estandar.
+#
+# Para mirar la politica jugando hace falta el visor del simulador:
+#   pip install pygame

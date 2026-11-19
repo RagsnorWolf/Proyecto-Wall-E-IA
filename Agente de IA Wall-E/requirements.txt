@@ -1,0 +1,5 @@
+# Sin dependencias obligatorias: el cliente HTTP y SQLite son biblioteca estandar.
+#
+# Opcionales segun el cuerpo y la percepcion:
+#   pip install pyserial          # cuerpo real por USB
+#   pip install opencv-python     # percepcion por camara
