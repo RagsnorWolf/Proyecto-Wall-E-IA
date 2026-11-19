@@ -110,8 +110,13 @@ del PPO y lo compara con el numérico en cada peso y sesgo de la red. Tolerancia
 
 ## Terminar rápido duele
 
-En CPU, `--pasos 60000` tarda unos 5 minutos y la política empieza a entregar
-cubos. Para que juegue decente hacen falta entre 150.000 y 250.000 pasos
-(20-30 minutos). El CSV guarda la curva: si `recompensa_media` deja de subir,
-mirá `entropia` (si está cerca de 0, la política dejó de explorar) y `aprox_kl`
-(si se dispara, bajá `--lr`).
+En CPU, `--pasos 60000` tarda unos 5 minutos y la política ya recorre el mapa
+(unas 8 m² de cobertura). Las primeras entregas aparecen cerca de los 120.000
+pasos; para que juegue fino hacen falta entre 150.000 y 250.000 (20-30 minutos).
+El CSV guarda la curva: si `recompensa_media` deja de subir, mirá `entropia`
+(si está cerca de 0, la política dejó de explorar) y `aprox_kl` (si se dispara,
+bajá `--lr`).
+
+La `politica.json` incluida viene de 300.000 pasos: explora bien, entrega poco y
+arranca mal en algunos episodios (choca al salir). Es un punto de partida, no el
+techo: `entrenar.bat` con `--reanudar` la sigue mejorando desde ahí.
