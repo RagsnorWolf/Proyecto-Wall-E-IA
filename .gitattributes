@@ -1,0 +1,10 @@
+# Normaliza finales de linea: los .bat tienen que ir con CRLF o cmd los lee mal.
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.ino text eol=lf

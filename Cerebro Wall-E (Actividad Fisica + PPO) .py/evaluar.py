@@ -31,6 +31,8 @@ def principal() -> int:
     parser.add_argument("--episodios", type=int, default=3)
     parser.add_argument("--semilla", type=int, default=1234)
     parser.add_argument("--ventana", action="store_true", help="dibuja la partida en pygame")
+    parser.add_argument("--muestreo", action="store_true",
+                        help="usa la politica estocastica en vez del argmax")
     args = parser.parse_args()
 
     if not args.modelo.is_file():
@@ -49,7 +51,7 @@ def principal() -> int:
         total = 0.0
         pasos = 0
         while True:
-            accion, _, _ = agente.actuar(obs, determinista=True)
+            accion, _, _ = agente.actuar(obs, determinista=not args.muestreo)
             obs, recompensa, terminado, truncado, info = entorno.step(accion)
             total += recompensa
             pasos += 1

@@ -28,7 +28,8 @@ if not exist ".venv\Scripts\python.exe" (
 echo [2/4] Instalando dependencias ^(ninguna obligatoria; pygame para --ventana^) ...
 ".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
 ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
-if errorlevel 1 goto :error
+".venv\Scripts\python.exe" -m pip install --quiet pygame
+if errorlevel 1 echo [AVISO] Sin pygame: se puede entrenar y evaluar, pero no abrir la ventana.
 
 echo [3/4] Verificando el gradiente y el entorno ...
 ".venv\Scripts\python.exe" -m unittest pruebas

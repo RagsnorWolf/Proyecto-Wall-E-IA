@@ -23,6 +23,7 @@ fi
 echo "[2/4] Instalando dependencias (ninguna obligatoria; pygame para --ventana) ..."
 .venv/bin/python -m pip install --quiet --upgrade pip
 .venv/bin/python -m pip install --quiet -r requirements.txt
+.venv/bin/python -m pip install --quiet pygame || echo "[AVISO] Sin pygame: se puede entrenar, pero no abrir la ventana."
 
 echo "[3/4] Verificando el gradiente y el entorno ..."
 .venv/bin/python -m unittest pruebas
