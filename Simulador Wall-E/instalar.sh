@@ -21,8 +21,9 @@ else
 fi
 
 echo "[2/3] Instalando dependencias (pygame para la ventana) ..."
-.venv/bin/python -m pip install --quiet --upgrade pip
-.venv/bin/python -m pip install --quiet -r requirements.txt
+.venv/bin/python -m pip install --quiet --upgrade pip || true
+.venv/bin/python -m pip install --quiet -r requirements.txt \
+    || echo "[AVISO] pygame no se instalo: el motor y el modo --sin-ventana andan igual."
 
 echo "[3/3] Comprobando que el motor funciona (sin ventana) ..."
 .venv/bin/python main.py --sin-ventana --pasos 120
