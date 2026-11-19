@@ -1,14 +1,14 @@
 """Copia el nucleo compartido a las carpetas que lo necesitan.
 
-Cada una de las tres carpetas tiene que poder descargarse y correr sola. Para
-eso, las que dependen de otra llevan una copia vendorizada:
+Cada una de las tres carpetas tiene que poder descargarse y correr sola. La
+unica que depende de otra es el Cerebro, que necesita la fisica del Simulador:
 
   Cerebro -> vendor/simulador   (fisica, escenarios, entorno, render)
-  Agente  -> vendor/simulador   (el mismo)
-  Agente  -> vendor/cerebro     (red, ppo, politica)
 
-La fuente de verdad son siempre `Simulador Wall-E/simulador` y
-`Cerebro .../cerebro`. Esto genera copias, nunca las edita a mano.
+El Agente de IA no copia nada: su cerebro es propio (brain/) y no usa el PPO.
+
+La fuente de verdad es siempre `Simulador Wall-E/simulador`. Esto genera
+copias, nunca las edita a mano.
 
     python sincronizar.py              # copia (o actualiza) las copias
     python sincronizar.py --verificar  # solo compara; sale 1 si estan viejas
@@ -26,35 +26,13 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent
 CEREBRO = RAIZ / "Cerebro Wall-E (Actividad Fisica + PPO) .py"
-AGENTE = RAIZ / "Agente de IA Wall-E"
 SIMULADOR = RAIZ / "Simulador Wall-E"
 
 ARCHIVOS_SIMULADOR = ("__init__.py", "fisica.py", "escenarios.py", "entorno.py", "render.py")
-ARCHIVOS_CEREBRO = ("red.py", "ppo.py", "politica.py")
 
-INICIO_CEREBRO = '''"""Politica PPO vendorizada para el Agente.
-
-GENERADO por sincronizar.py desde `Cerebro Wall-E .../cerebro`.
-No editar a mano: se sobrescribe en la proxima sincronizacion.
-"""
-from .politica import PoliticaRefleja, ruta_por_defecto
-from .ppo import AgentePPO, Hiperparametros
-from .red import RedActorCritica
-
-__all__ = [
-    "AgentePPO",
-    "Hiperparametros",
-    "PoliticaRefleja",
-    "RedActorCritica",
-    "ruta_por_defecto",
-]
-'''
-
-# (origen, destino, archivos, contenido_generado_para__init__)
+# (origen, destino, archivos)
 TRABAJOS = [
-    (SIMULADOR / "simulador", CEREBRO / "vendor" / "simulador", ARCHIVOS_SIMULADOR, None),
-    (SIMULADOR / "simulador", AGENTE / "vendor" / "simulador", ARCHIVOS_SIMULADOR, None),
-    (CEREBRO / "cerebro", AGENTE / "vendor" / "cerebro", ARCHIVOS_CEREBRO, INICIO_CEREBRO),
+    (SIMULADOR / "simulador", CEREBRO / "vendor" / "simulador", ARCHIVOS_SIMULADOR),
 ]
 
 AVISO = (
@@ -72,15 +50,13 @@ def sincronizar(verificar: bool) -> int:
     problemas: list[str] = []
     copiados = 0
 
-    for origen, destino, archivos, inicio in TRABAJOS:
+    for origen, destino, archivos in TRABAJOS:
         if not origen.is_dir():
             problemas.append(f"falta el origen {origen}")
             continue
         if not verificar:
             destino.mkdir(parents=True, exist_ok=True)
             (destino / "LEEME.txt").write_text(_texto_aviso(), encoding="utf-8")
-        if inicio is not None and not verificar:
-            (destino / "__init__.py").write_text(inicio, encoding="utf-8")
 
         for nombre in archivos:
             fuente = origen / nombre

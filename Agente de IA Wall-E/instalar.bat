@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo ==========================================
-echo   WALL-E - Agente de IA : instalacion
+echo   WALL-E - Agente de IA (cabina web)
 echo ==========================================
 echo.
 
@@ -25,33 +25,30 @@ if not exist ".venv\Scripts\python.exe" (
     echo [1/4] El entorno virtual ya existe.
 )
 
-echo [2/4] Instalando dependencias ^(ninguna obligatoria^) ...
-".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
+echo [2/4] Instalando dependencias opcionales ...
+".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip >nul 2>nul
 ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
-if errorlevel 1 goto :error
+if errorlevel 1 (
+    echo [AVISO] Algunas dependencias opcionales no se instalaron.
+    echo         La cabina funciona igual: reporta lo que falta en /api/state.
+)
 
-echo [3/4] Corriendo las pruebas del bucle ^(sin red, servidor falso^) ...
+echo [3/4] Comprobando el cerebro y el servidor ...
 ".venv\Scripts\python.exe" -m unittest pruebas_agente
 if errorlevel 1 goto :error
 
-echo [4/4] Comprobando el simulador vendorizado ...
-".venv\Scripts\python.exe" -c "from agente.actuadores import ActuadorSimulado; print('cuerpo simulado OK:', ActuadorSimulado('patio', semilla=1).estado()['escenario'])"
-if errorlevel 1 goto :error
-
-if not exist "config.json" (
-    copy /y config.ejemplo.json config.json >nul
-    echo.
-    echo [AVISO] Cree config.json a partir del ejemplo.
-    echo         Falta la clave del modelo: define la variable WALLE_API_KEY
-    echo.
-    echo         PowerShell:  $env:WALLE_API_KEY="tu-clave"
-    echo         CMD:         set WALLE_API_KEY=tu-clave
-    echo.
-)
+echo [4/4] Creando config.json y carpetas de datos ...
+if not exist "config.json" copy /y config.ejemplo.json config.json >nul
+if not exist "datos" mkdir "datos"
 
 echo.
-echo Listo. Para arrancar: iniciar.bat
-echo   o ejecuta:  .venv\Scripts\python.exe main.py --probar
+echo Listo. Para arrancar:
+echo   iniciar.bat                  consola con el registro del servidor
+echo   "WALL-E Asistente IA.bat"    sin consola, abre el navegador solo
+echo   crear_acceso_directo.bat     deja el icono en el escritorio
+echo.
+echo La cabina escucha en http://127.0.0.1:8765/
+echo Para conversar necesita Ollama con el modelo creado: build_model.py
 pause
 exit /b 0
 

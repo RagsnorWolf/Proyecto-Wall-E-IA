@@ -1,131 +1,97 @@
-# Agente de IA Wall-E
+# Agente de IA WALL-E — Centro de Comando
 
-La cabeza del robot: un modelo de lenguaje decide qué hacer, un catálogo cerrado
-de herramientas lo ejecuta, y la política PPO del Cerebro conduce las ruedas
-cuando hay que recorrer distancia.
+La cabina del robot: una interfaz web local en `http://127.0.0.1:8765/` con
+WALL-E en 3D, chat con voz, telemetría, control de orugas, cámara, memoria de
+largo plazo y agenda. Detrás hay un cerebro que piensa con un modelo local
+(Ollama) y ejecuta herramientas de verdad.
+
+Es la misma aplicación que abrís con el acceso directo **WALL-E Asistente IA**
+del escritorio.
 
 ## Instalar (Windows, sin saber nada de Python)
 
 1. Instalá Python 3.10 o superior desde <https://www.python.org/downloads/> y
    marcá la casilla **"Add python.exe to PATH"**.
-2. Doble clic en **`instalar.bat`**. Crea el entorno, corre las pruebas del bucle
-   y comprueba el simulador vendorizado. También crea `config.json`.
-3. Definí la clave del modelo en esa misma ventana:
+2. Doble clic en **`instalar.bat`**. Crea el entorno, instala lo opcional,
+   corre las 10 pruebas y deja `config.json` listo.
+3. Doble clic en **`WALL-E Asistente IA.bat`**. Abre el navegador solo.
 
-   ```powershell
-   $env:WALLE_API_KEY="tu-clave"
-   ```
+Para dejarlo en el escritorio con el icono de WALL-E:
 
-4. Doble clic en **`iniciar.bat`**.
+```
+crear_acceso_directo.bat
+```
 
 ## Instalar (Linux o macOS)
 
 ```bash
 chmod +x instalar.sh
 ./instalar.sh
-export WALLE_API_KEY="tu-clave"
-.venv/bin/python main.py --probar
+.venv/bin/python server.py
 ```
 
-## Esta carpeta funciona sola
+## El modelo de lenguaje (Ollama)
 
-Lleva en `vendor/` lo que necesita: el simulador (para el cuerpo `simulado`) y
-la política PPO (para la herramienta `reflejo`). Se generan desde la fuente de
-verdad con `python sincronizar.py` en la raíz del repo, y la CI falla si quedan
-desactualizados. Si descargás solo `Agente de IA Wall-E/`, funciona.
-
-Sin modelo de lenguaje también sirve: `python main.py --sin-llm --reflejo 300`
-deja que la política entrenada conduzca sola.
-
-## Configurar
+Sin Ollama la cabina abre igual —el chat responde con una frase de cortesía—
+pero para conversar de verdad:
 
 ```powershell
-copy config.ejemplo.json config.json
-$env:WALLE_API_KEY="tu-clave"
-python main.py --probar
+# 1. Instalar Ollama: https://ollama.com/download
+ollama pull qwen2.5:3b
+
+# 2. Crear el modelo con la personalidad de WALL-E
+.\.venv\Scripts\python.exe build_model.py --create
+
+# 3. Arrancar la cabina
+iniciar.bat
 ```
 
-`config.json` no se sube al repositorio (está en `.gitignore`). La clave tampoco:
-se lee de la variable de entorno que diga `variable_clave` (por defecto
-`WALLE_API_KEY`).
+`build_model.py` arma el `Modelfile` leyendo `prompts/system.md`, así que la
+personalidad se edita en un solo lugar. Detalles de qué modelo conviene según
+la máquina: `MODELOS.md`.
 
-Cualquier proveedor que hable el dialecto de OpenAI sirve, cambiando `base_url`
-y `modelo`:
+Para probar el cerebro sin interfaz: `python cli.py --model walle`.
 
-| Proveedor | base_url | modelo de ejemplo |
-|---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` |
-| OpenRouter | `https://openrouter.ai/api/v1` | `anthropic/claude-3.5-sonnet` |
-| Ollama local | `http://localhost:11434/v1` | `llama3.1` |
+## Qué hace cada panel
 
-Con Ollama no hace falta clave: poné `"proveedor": "ollama"` y la variable puede
-estar vacía.
-
-## Usar
-
-```powershell
-python main.py                        # consola interactiva
-python main.py --demo                 # una orden de ejemplo y sale
-python main.py --cuerpo consola       # sin simulador: solo registra órdenes
-python main.py --sin-llm --reflejo 200  # solo la política PPO conduciendo
-python main.py --instruccion "recogé un cubo y llevalo al contenedor"
-```
-
-En consola escribís la orden; el agente mira, decide, actúa y responde. Todo
-queda en `datos/memoria.db`.
-
-## Cuerpos
-
-| `cuerpo` | Qué hace | Cuándo |
-|---|---|---|
-| `simulado` | Mueve el WALL-E del Simulador | Desarrollo y pruebas (por defecto) |
-| `serial` | Habla con una placa por USB | Robot real |
-| `consola` | Solo registra las órdenes | Probar el bucle sin mover nada |
-
-### Protocolo serial
-
-Pensado para un Arduino o ESP32. Una orden por línea, una respuesta por línea:
-
-```
-PC   -> placa : AVANZAR 3\n
-placa -> PC   : OK {"bateria": 88.2, "basura": 3}\n
-```
-
-Órdenes: `AVANZAR <n>`, `GIRAR IZQ|DER <n>`, `RECOGER`, `ESPERAR <n>`, `ESTADO`.
-Respuestas: `OK <json opcional>` o `ERR <motivo>`. `ESTADO` debe devolver un
-objeto JSON en una sola línea. Con eso, cualquier firmware de veinte líneas
-conecta.
-
-## Herramientas del agente
-
-El modelo solo puede llamar a estas ocho. El catálogo es cerrado: si pide otra
-cosa, recibe un error explícito con la lista válida.
-
-| Herramienta | Para qué |
+| Panel | Qué muestra |
 |---|---|
-| `mirar` | Estado del mundo + descripción de la percepción |
-| `mover` | `avanzar`, `izquierda`, `derecha`, `esperar` (máx. 40) |
-| `recoger` | Agarrar un cubo o depositar en el contenedor |
-| `reflejo` | Delegar N pasos a la política PPO entrenada |
-| `recordar` / `consultar_memoria` | Memoria de largo plazo (SQLite) |
-| `hablar` | Decirle algo al operador |
-| `terminar` | Cerrar la tarea con un resumen |
+| Chat | Conversación con voz; el modelo decide y llama herramientas |
+| WALL-E 3D | El robot animado en tres.js, con expresión y sonidos |
+| Telemetría | CPU, RAM, batería y estado del proceso |
+| Orugas | Manejo manual y conexión con el robot real por USB |
+| Cámara | Foto, detección de color y seguimiento automático |
+| Memoria | Lo que WALL-E recuerda, con búsqueda y borrado |
+| Agenda | Eventos locales (Google Calendar si hay credenciales) |
+| Ajustes | Modelo, puerto serial, índice de cámara |
 
-El reparto es a propósito: **pensar con el modelo, moverse con la política.**
-Recorrer 3 metros no debería costar ocho llamadas a la API.
+## Qué necesita y qué no
 
-## Percepción
+Nada es obligatorio. Cada cosa que falte se reporta en `/api/state` y la cabina
+sigue funcionando con el resto:
 
-| Modo | Necesita | Qué entrega |
-|---|---|---|
-| `simulado` | nada | Estado exacto del mundo |
-| `manual` | nada | Una línea que escribe el operador |
-| `camara` | `opencv-python` | Fotograma listo para un modelo de visión |
+| Falta | Consecuencia |
+|---|---|
+| Ollama | El chat contesta con una frase fija, sin pensar |
+| `pyserial` | No hay control del robot real; queda el modo simulación |
+| `opencv-python` | El panel de cámara queda apagado |
+| `psutil` | Telemetría del sistema en blanco |
+| Piper + modelo `.onnx` | Sin voz; `/api/tts` responde 503 |
 
-`--percepcion auto` elige `simulado` si el cuerpo es el simulador y `manual` si
-es hardware. Nada simula una cámara que no existe.
+## API
+
+Todo lo que hace la interfaz se puede llamar a mano:
+
+```
+GET  /api/health          GET  /api/state        GET  /api/companion
+GET  /api/events          GET  /api/ports        GET  /api/diagnostics
+POST /api/chat            POST /api/robot/move   POST /api/robot/drive
+POST /api/robot/stop      POST /api/robot/connect /disconnect
+POST /api/emotion         GET  /api/camera/frame POST /api/vision/track
+GET  /api/memory?q=       POST /api/memory       DELETE /api/memory/<id>
+GET  /api/agenda          POST /api/agenda       DELETE /api/agenda?index=0
+GET  /api/settings        POST /api/settings     POST /api/shutdown
+```
 
 ## Pruebas
 
@@ -133,20 +99,27 @@ es hardware. Nada simula una cámara que no existe.
 python -m unittest -v pruebas_agente
 ```
 
-Levantan un servidor OpenAI falso en `127.0.0.1`, con tool calling real, y
-verifican el bucle completo: formato de mensajes, despacho de herramientas,
-memoria y cierre. Sin red, sin claves, sin costo.
+Diez pruebas, sin red, sin cámara y sin Ollama: importan el cerebro, escriben y
+buscan en la memoria SQLite, levantan `server.py` en un puerto libre y hablan
+con la API como lo haría el navegador —incluido el caso de que falte todo— y
+verifican que la interfaz se sirve.
 
 ## Estructura
 
 ```
-main.py                 CLI: consola, demo, probar credenciales, solo reflejo
-agente/config.py        JSON + variables de entorno, validado
-agente/llm.py           cliente HTTP compatible con OpenAI, con reintentos
-agente/herramientas.py  esquemas + despacho, errores como valores
-agente/bucle.py         el ciclo instrucción → modelo → herramientas
-agente/memoria.py       SQLite: eventos + hechos con búsqueda por palabra
-agente/actuadores.py    simulado / serial / consola
-agente/percepcion.py    simulado / manual / cámara
-agente/cerebro.py       la política PPO como reflejo
+server.py                 servidor HTTP + todas las rutas /api
+launcher.py               arranca el servidor y abre el navegador
+tts.py                    voz local con Piper (opcional)
+build_model.py            crea el modelo de Ollama desde prompts/system.md
+cli.py                    chat por terminal, sin interfaz
+brain/                    agent, llm (Ollama), tools, memory, emotions, computer
+hardware/esp32_link.py    puente serial con el robot
+vision/reflex.py          cámara y detección de color (opcional)
+prompts/system.md         personalidad — fuente de verdad del modelo
+static/                   interfaz ya compilada (no necesita Node)
+ui/                       fuentes React por si querés recompilarla
+datos/                    memoria, emociones y agenda (no se sube al repo)
+tools/                    generador de sonidos de WALL-E
 ```
+
+La carpeta funciona sola: no importa nada de las otras dos del repositorio.

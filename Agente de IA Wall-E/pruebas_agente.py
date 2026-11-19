@@ -1,145 +1,191 @@
-"""Pruebas del Agente: bucle completo contra un servidor OpenAI falso local.
+"""Pruebas de la cabina: cerebro importable y API viva.
+
+No necesitan red, ni Ollama, ni camara: el servidor degrada solo y estos tests
+verifican justamente eso. Levantan `server.py` en un puerto libre, hablan con
+la API como lo haria el navegador y lo apagan.
 
     python -m unittest -v pruebas_agente
-
-El servidor falso devuelve un tool_call a `mirar` y despues a `terminar`, asi
-se verifica de punta a punta: formato de mensajes, despacho de herramientas,
-memoria, y cierre del bucle. Sin red y sin claves.
 """
 from __future__ import annotations
 
 import json
-import threading
+import socket
+import subprocess
+import sys
+import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.error
+import urllib.request
+from pathlib import Path
+from urllib.parse import quote
 
-from agente import BucleAgente, ClienteLLM, Config, Reflejo
-from agente.actuadores import ActuadorSimulado
-from agente.memoria import Memoria
-from agente.percepcion import PercepcionSimulada
-
-
-class _Manejador(BaseHTTPRequestHandler):
-    llamadas: list[dict] = []
-
-    def do_POST(self) -> None:  # noqa: N802 - firma de la libreria
-        largo = int(self.headers.get("Content-Length", "0"))
-        cuerpo = json.loads(self.rfile.read(largo) or b"{}")
-        _Manejador.llamadas.append(cuerpo)
-        turno = len(_Manejador.llamadas)
-        if turno == 1:
-            mensaje = {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "mirar", "arguments": "{}"},
-                }],
-            }
-        else:
-            mensaje = {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "id": "call_2",
-                    "type": "function",
-                    "function": {
-                        "name": "terminar",
-                        "arguments": json.dumps({"resumen": "mire el mundo y cerre"}),
-                    },
-                }],
-            }
-        datos = json.dumps({"choices": [{"message": mensaje}]}).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(datos)))
-        self.end_headers()
-        self.wfile.write(datos)
-
-    def log_message(self, formato: str, *args) -> None:  # silencio en los tests
-        pass
+RAIZ = Path(__file__).resolve().parent
 
 
-class PruebaBucle(unittest.TestCase):
+def puerto_libre() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+class PruebasCerebro(unittest.TestCase):
+    """El paquete `brain` tiene que importar sin dependencias externas."""
+
+    def test_importa_el_cerebro(self) -> None:
+        sys.path.insert(0, str(RAIZ))
+        try:
+            from brain.agent import Agent  # noqa: WPS433
+            from brain.memory import Memory  # noqa: WPS433
+            from brain.tools import Tools  # noqa: WPS433
+            from hardware.esp32_link import Esp32Link  # noqa: WPS433
+            from vision.reflex import Camera  # noqa: WPS433
+        finally:
+            sys.path.pop(0)
+
+        self.assertTrue(callable(Agent))
+        self.assertTrue(callable(Tools))
+        self.assertTrue(callable(Memory))
+        self.assertTrue(callable(Esp32Link))
+        self.assertTrue(callable(Camera))
+
+    def test_memoria_sqlite(self) -> None:
+        import tempfile
+
+        sys.path.insert(0, str(RAIZ))
+        try:
+            from brain.memory import Memory  # noqa: WPS433
+        finally:
+            sys.path.pop(0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memoria = Memory(Path(tmp) / "memoria.db")
+            try:
+                memoria.remember("el cubo azul vive en el patio")
+                encontrado = memoria.search("cubo azul")
+                self.assertTrue(encontrado)
+                self.assertEqual(memoria.count(), 1)
+                self.assertIn("cubo azul", encontrado[0]["text"])
+            finally:
+                memoria.close()
+
+    def test_emociones_responden(self) -> None:
+        import tempfile
+
+        sys.path.insert(0, str(RAIZ))
+        try:
+            from brain.emotions import EmotionState  # noqa: WPS433
+        finally:
+            sys.path.pop(0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = EmotionState(Path(tmp) / "emociones.json")
+            antes = estado.snapshot()["energy"]
+            self.assertIsInstance(antes, (int, float))
+            estado.interact("saludo")
+            despues = estado.snapshot()
+            self.assertIn("mood", despues)
+            self.assertIn("interactions", despues)
+
+
+class PruebasServidor(unittest.TestCase):
+    """La API HTTP: arranca, responde y se apaga."""
+
+    proceso: subprocess.Popen | None = None
+    puerto: int = 0
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.servidor = ThreadingHTTPServer(("127.0.0.1", 0), _Manejador)
-        cls.hilo = threading.Thread(target=cls.servidor.serve_forever, daemon=True)
-        cls.hilo.start()
-        puerto = cls.servidor.server_address[1]
-        cls.config = Config(base_url=f"http://127.0.0.1:{puerto}/v1", modelo="falso", max_turnos=6)
-        import os
-        os.environ.setdefault(cls.config.variable_clave, "clave-de-prueba")
+        cls.puerto = puerto_libre()
+        cls.proceso = subprocess.Popen(
+            [sys.executable, "server.py", "--no-browser", "--port", str(cls.puerto)],
+            cwd=str(RAIZ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        limite = time.time() + 60
+        while time.time() < limite:
+            if cls.proceso.poll() is not None:
+                salida = cls.proceso.stdout.read() if cls.proceso.stdout else ""
+                raise AssertionError(f"el servidor murio al arrancar:\n{salida}")
+            try:
+                with urllib.request.urlopen(cls.url("/api/health"), timeout=1) as r:
+                    if r.status == 200:
+                        return
+            except (urllib.error.URLError, OSError):
+                time.sleep(0.2)
+        raise AssertionError("el servidor no respondio en 60 s")
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.servidor.shutdown()
-        cls.servidor.server_close()
+        if cls.proceso and cls.proceso.poll() is None:
+            cls.proceso.terminate()
+            try:
+                cls.proceso.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                cls.proceso.kill()
 
-    def setUp(self) -> None:
-        _Manejador.llamadas.clear()
+    @classmethod
+    def url(cls, ruta: str) -> str:
+        return f"http://127.0.0.1:{cls.puerto}{ruta}"
 
-    def test_bucle_completo(self) -> None:
-        actuador = ActuadorSimulado("chatarreria", semilla=3)
-        memoria = Memoria(_ruta_temporal(self))
+    def pedir(self, ruta: str, datos: dict | None = None) -> dict:
+        cuerpo = None
+        cabeceras = {"Content-Type": "application/json"}
+        if datos is not None:
+            cuerpo = json.dumps(datos).encode("utf-8")
+        peticion = urllib.request.Request(self.url(ruta), data=cuerpo, headers=cabeceras)
+        with urllib.request.urlopen(peticion, timeout=30) as respuesta:
+            return json.loads(respuesta.read().decode("utf-8"))
+
+    def test_health(self) -> None:
+        self.assertTrue(self.pedir("/api/health")["ok"])
+
+    def test_estado_degradado_sin_dependencias(self) -> None:
+        estado = self.pedir("/api/state")
+        self.assertTrue(estado["ok"])
+        self.assertTrue(estado["ready"])
+        # Sin pyserial, opencv ni Ollama la cabina igual queda lista.
+        self.assertIn("ollama", estado)
+        self.assertIn("camera", estado)
+        self.assertIn("emotion", estado)
+        self.assertEqual(estado["mode"], "simulacion")
+
+    def test_companion_y_eventos(self) -> None:
+        self.assertTrue(self.pedir("/api/companion")["ok"])
+        self.assertTrue(self.pedir("/api/events?limit=5")["ok"])
+
+    def test_memoria_por_api(self) -> None:
+        agregado = self.pedir("/api/memory", {"text": "prueba automatica de memoria"})
+        self.assertTrue(agregado["ok"])
+        listado = self.pedir("/api/memory?q=" + quote("prueba automatica"))
+        self.assertTrue(listado["ok"])
+        entradas = listado.get("items") or listado.get("memories") or []
+        self.assertTrue(
+            any("prueba automatica" in json.dumps(e, ensure_ascii=False)
+                for e in entradas),
+            f"la memoria no devolvio lo recien guardado: {listado}",
+        )
+
+    def test_voz_falla_limpio_sin_piper(self) -> None:
         try:
-            percepcion = PercepcionSimulada(actuador)
-            bucle = BucleAgente(self.config, actuador, percepcion, memoria)
-            resultado = bucle.instruccion("mira donde estas")
-            self.assertTrue(resultado.terminado)
-            self.assertIn("mire el mundo", resultado.respuesta)
-            self.assertGreaterEqual(len(_Manejador.llamadas), 2)
-            # El segundo POST debe llevar el resultado de la herramienta.
-            segundo = _Manejador.llamadas[1]["messages"]
-            papeles = [m["role"] for m in segundo]
-            self.assertIn("tool", papeles)
-            self.assertEqual(segundo[-1]["role"], "tool")
-            self.assertIn("herramienta", json.dumps(memoria.ultimos_eventos(5)))
-        finally:
-            memoria.cerrar()
+            self.pedir("/api/tts", {"text": "hola"})
+        except urllib.error.HTTPError as exc:
+            self.assertIn(exc.code, (503, 500))
 
-    def test_percepcion_describe_el_mundo(self) -> None:
-        actuador = ActuadorSimulado("patio", semilla=2)
-        texto = PercepcionSimulada(actuador).describir()
-        self.assertIn("Bateria", texto)
-        self.assertIn("basura", texto.lower())
+    def test_chat_sin_ollama_no_rompe(self) -> None:
+        respuesta = self.pedir("/api/chat", {"message": "quien sos"})
+        self.assertTrue(respuesta["ok"])
+        self.assertIsInstance(respuesta.get("reply"), str)
+        self.assertTrue(respuesta["reply"].strip())
 
-    def test_memoria_busca_por_palabra(self) -> None:
-        memoria = Memoria(_ruta_temporal(self))
-        try:
-            memoria.recordar("el contenedor esta en la esquina noreste", "contenedor")
-            encontrados = memoria.buscar("donde esta el contenedor")
-            self.assertTrue(encontrados)
-            self.assertIn("noreste", encontrados[0])
-        finally:
-            memoria.cerrar()
-
-    def test_cliente_sin_clave_avisa(self) -> None:
-        config = Config(variable_clave="VARIABLE_QUE_NO_EXISTE_123")
-        from agente.llm import ErrorLLM
-        with self.assertRaises(ErrorLLM):
-            ClienteLLM(config)
-
-
-class PruebaReflejo(unittest.TestCase):
-    def test_reflejo_inexistente_es_none(self) -> None:
-        self.assertIsNone(Reflejo.cargar_si_existe("no_existe.json"))
-
-
-def _ruta_temporal(caso: unittest.TestCase):
-    import tempfile
-    from pathlib import Path
-
-    carpeta = Path(tempfile.mkdtemp(prefix="walle_prueba_"))
-    caso.addCleanup(lambda: _limpiar(carpeta))
-    return carpeta / "memoria.db"
-
-
-def _limpiar(carpeta) -> None:
-    import shutil
-
-    shutil.rmtree(carpeta, ignore_errors=True)
+    def test_sirve_la_interfaz(self) -> None:
+        with urllib.request.urlopen(self.url("/"), timeout=30) as respuesta:
+            html = respuesta.read().decode("utf-8", errors="replace")
+        self.assertIn('id="root"', html)
+        self.assertIn("assets/index-", html)
 
 
 if __name__ == "__main__":

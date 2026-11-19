@@ -8,19 +8,13 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-if not exist "config.json" (
-    copy /y config.ejemplo.json config.json >nul
-)
+if not exist "config.json" copy /y config.ejemplo.json config.json >nul
 
-if "%WALLE_API_KEY%"=="" (
-    echo [AVISO] La variable WALLE_API_KEY esta vacia: no se podra llamar al modelo.
-    echo         Definila en esta ventana antes de seguir:
-    echo             set WALLE_API_KEY=tu-clave
-    echo.
-    echo         Tambien podes usar solo el reflejo entrenado, sin modelo:
-    echo             .venv\Scripts\python.exe main.py --sin-llm --reflejo 300
-    echo.
-)
+title WALL-E - cabina local
+echo.
+echo Abriendo WALL-E en http://127.0.0.1:8765/
+echo Ctrl+C para apagar el servidor.
+echo.
 
-".venv\Scripts\python.exe" main.py %*
+".venv\Scripts\python.exe" server.py %*
 if errorlevel 1 pause

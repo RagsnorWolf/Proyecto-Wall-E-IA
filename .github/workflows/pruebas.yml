@@ -32,7 +32,7 @@ jobs:
         working-directory: "Cerebro Wall-E (Actividad Fisica + PPO) .py"
         run: python -m unittest -v pruebas
 
-      - name: Agente (bucle con servidor falso)
+      - name: Agente (cabina + API)
         working-directory: "Agente de IA Wall-E"
         run: python -m unittest -v pruebas_agente
 
@@ -87,5 +87,4 @@ jobs:
         working-directory: ${{ env.SOLO }}
         run: |
           python -m unittest -v pruebas_agente
-          python -c "from agente.actuadores import ActuadorSimulado; print(ActuadorSimulado('patio', semilla=1).estado()['escenario'])"
-          python main.py --sin-llm --reflejo 60
+          python -c "import server; print('cabina', server.VERSION)"

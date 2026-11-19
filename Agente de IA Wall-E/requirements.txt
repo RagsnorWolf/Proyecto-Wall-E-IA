@@ -1,5 +1,18 @@
-# Sin dependencias obligatorias: el cliente HTTP y SQLite son biblioteca estandar.
+# La cabina arranca sin instalar nada: usa solo la biblioteca estandar.
 #
-# Opcionales segun el cuerpo y la percepcion:
-#   pip install pyserial          # cuerpo real por USB
-#   pip install opencv-python     # percepcion por camara
+# Todo lo de abajo es opcional. Cada cosa que falte, WALL-E la reporta en
+# /api/state y sigue funcionando con lo que tenga.
+
+# Telemetria fina (CPU, RAM) en el panel de sistema
+psutil>=5.9
+
+# Robot real por USB (cuerpo ESP32 / Arduino)
+pyserial>=3.5
+
+# Vision: camara, deteccion de color y seguimiento
+# (arrastra numpy; sin esto la cabina abre igual, sin panel de camara)
+opencv-python>=4.9
+
+# Voz local. Ademas del paquete hace falta el modelo .onnx y el binario de
+# Piper; sin ellos /api/tts responde 503 y la cabina sigue andando.
+#   pip install piper-tts
