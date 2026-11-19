@@ -12,15 +12,15 @@ from dataclasses import dataclass
 
 @dataclass
 class PesosRecompensa:
-    celda_nueva: float = 0.25      # por celda de 0.5x0.5 m descubierta
+    celda_nueva: float = 0.35      # por celda de 0.5x0.5 m descubierta
     por_metro: float = 0.02        # forma suave de avance mientras explora
-    recoger: float = 2.0           # cada cubo agarrado
-    entregar: float = 10.0         # cada cubo depositado en el contenedor
-    limpieza_total: float = 5.0    # bonus por dejar el mapa sin basura
-    paso: float = -0.01            # presiona a no perder tiempo
-    colision: float = -0.15        # golpe contra muro o borde
+    recoger: float = 2.5           # cada cubo agarrado
+    entregar: float = 12.0         # cada cubo depositado en el contenedor
+    limpieza_total: float = 6.0    # bonus por dejar el mapa sin basura
+    paso: float = -0.02            # presiona a no perder tiempo
+    colision: float = -0.35        # golpe contra muro o borde
     bateria_baja: float = -0.05    # por paso con bateria bajo el 10%
-    sin_bateria: float = -5.0      # se quedo tirado
+    sin_bateria: float = -6.0      # se quedo tirado
 
 
 class CalculadoraRecompensa:

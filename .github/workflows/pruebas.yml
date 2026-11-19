@@ -22,6 +22,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - name: Copias vendorizadas al dia
+        run: python sincronizar.py --verificar
+
       - name: Compilar todo
         run: python -m compileall -q .
 
@@ -39,4 +42,50 @@ jobs:
 
       - name: Entrenamiento corto de humo
         working-directory: "Cerebro Wall-E (Actividad Fisica + PPO) .py"
-        run: python entrenar_ppo.py --pasos 1024 --rollout 512 --eval-episodios 1
+        run: python entrenar_ppo.py --pasos 2048 --eval-episodios 1 --guardar modelo/humo.json --registro modelo/humo.csv
+
+  carpeta-suelta:
+    # La promesa del repo: cada carpeta se descarga SOLA y funciona.
+    # Se copia cada una a un directorio vacio, sin carpetas hermanas.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        carpeta:
+          - "Simulador Wall-E"
+          - "Cerebro Wall-E (Actividad Fisica + PPO) .py"
+          - "Agente de IA Wall-E"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Copiar solo esta carpeta
+        run: |
+          mkdir -p "$RUNNER_TEMP/solo"
+          cp -r "${{ matrix.carpeta }}" "$RUNNER_TEMP/solo/proyecto"
+          echo "SOLO=$RUNNER_TEMP/solo/proyecto" >> "$GITHUB_ENV"
+
+      - name: Simulador suelto
+        if: matrix.carpeta == 'Simulador Wall-E'
+        working-directory: ${{ env.SOLO }}
+        run: |
+          python -m pip install --quiet pygame
+          python main.py --sin-ventana --pasos 150
+
+      - name: Cerebro suelto
+        if: matrix.carpeta == 'Cerebro Wall-E (Actividad Fisica + PPO) .py'
+        working-directory: ${{ env.SOLO }}
+        run: |
+          python -m unittest -v pruebas
+          python entrenar_ppo.py --pasos 1024 --eval-episodios 1 --guardar modelo/humo.json --registro modelo/humo.csv
+
+      - name: Agente suelto
+        if: matrix.carpeta == 'Agente de IA Wall-E'
+        working-directory: ${{ env.SOLO }}
+        run: |
+          python -m unittest -v pruebas_agente
+          python -c "from agente.actuadores import ActuadorSimulado; print(ActuadorSimulado('patio', semilla=1).estado()['escenario'])"
+          python main.py --sin-llm --reflejo 60

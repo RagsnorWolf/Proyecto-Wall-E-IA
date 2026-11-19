@@ -4,6 +4,35 @@ Mundo 2D con física de chasis diferencial: ruedas, inercia de batería, colisio
 contra muros y cubos de basura que hay que llevar al contenedor. Es la base sobre
 la que entrena el Cerebro y donde el Agente practica sin romper nada.
 
+## Instalar (Windows, sin saber nada de Python)
+
+1. Instalá Python 3.10 o superior desde <https://www.python.org/downloads/> y
+   marcá la casilla **"Add python.exe to PATH"** durante la instalación.
+2. Doble clic en **`instalar.bat`**. Crea el entorno, instala pygame y hace una
+   prueba de humo.
+3. Doble clic en **`iniciar.bat`** para jugar.
+
+## Instalar (Linux o macOS)
+
+```bash
+chmod +x instalar.sh
+./instalar.sh
+.venv/bin/python main.py
+```
+
+## Instalar a mano
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+## Esta carpeta funciona sola
+
+No necesita nada del resto del repositorio: la física, los escenarios y el visor
+están acá adentro. Si descargaste únicamente `Simulador Wall-E/`, alcanza.
+
 ## Jugar
 
 ```powershell

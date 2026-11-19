@@ -4,6 +4,32 @@ Aprendizaje por refuerzo para que WALL-E se mueva de verdad: recorra el mapa,
 junte cubos y los entregue. Todo el PPO está escrito a mano en Python puro —sin
 numpy, sin torch— con retropropagación verificada por diferencias finitas.
 
+## Instalar (Windows, sin saber nada de Python)
+
+1. Instalá Python 3.10 o superior desde <https://www.python.org/downloads/> y
+   marcá la casilla **"Add python.exe to PATH"**.
+2. Doble clic en **`instalar.bat`**. Crea el entorno, corre las pruebas
+   (incluida la del gradiente) y entrena 2048 pasos como humo.
+3. Doble clic en **`entrenar.bat`** para entrenar en serio (60.000 pasos).
+4. Doble clic en **`iniciar.bat`** para ver la política jugando.
+
+## Instalar (Linux o macOS)
+
+```bash
+chmod +x instalar.sh
+./instalar.sh
+.venv/bin/python entrenar_ppo.py --pasos 60000
+```
+
+## Esta carpeta funciona sola
+
+No depende de la carpeta hermana: lleva una copia vendorizada del simulador en
+`vendor/simulador/`, generada desde la fuente de verdad por `sincronizar.py`
+(está en la raíz del repo). Por eso podés descargar únicamente
+`Cerebro Wall-E (Actividad Fisica + PPO) .py/` y entrenar igual.
+
+La copia se regenera con `python sincronizar.py`; la CI falla si queda viejas.
+
 ## Entrenar
 
 ```powershell

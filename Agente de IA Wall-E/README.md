@@ -4,6 +4,39 @@ La cabeza del robot: un modelo de lenguaje decide qué hacer, un catálogo cerra
 de herramientas lo ejecuta, y la política PPO del Cerebro conduce las ruedas
 cuando hay que recorrer distancia.
 
+## Instalar (Windows, sin saber nada de Python)
+
+1. Instalá Python 3.10 o superior desde <https://www.python.org/downloads/> y
+   marcá la casilla **"Add python.exe to PATH"**.
+2. Doble clic en **`instalar.bat`**. Crea el entorno, corre las pruebas del bucle
+   y comprueba el simulador vendorizado. También crea `config.json`.
+3. Definí la clave del modelo en esa misma ventana:
+
+   ```powershell
+   $env:WALLE_API_KEY="tu-clave"
+   ```
+
+4. Doble clic en **`iniciar.bat`**.
+
+## Instalar (Linux o macOS)
+
+```bash
+chmod +x instalar.sh
+./instalar.sh
+export WALLE_API_KEY="tu-clave"
+.venv/bin/python main.py --probar
+```
+
+## Esta carpeta funciona sola
+
+Lleva en `vendor/` lo que necesita: el simulador (para el cuerpo `simulado`) y
+la política PPO (para la herramienta `reflejo`). Se generan desde la fuente de
+verdad con `python sincronizar.py` en la raíz del repo, y la CI falla si quedan
+desactualizados. Si descargás solo `Agente de IA Wall-E/`, funciona.
+
+Sin modelo de lenguaje también sirve: `python main.py --sin-llm --reflejo 300`
+deja que la política entrenada conduzca sola.
+
 ## Configurar
 
 ```powershell

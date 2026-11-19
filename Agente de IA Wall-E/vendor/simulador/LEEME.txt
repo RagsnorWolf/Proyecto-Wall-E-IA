@@ -1,0 +1,3 @@
+Carpeta generada por sincronizar.py desde la fuente de verdad del repo.
+No editar a mano: se sobrescribe. Para cambiar algo, editá el original
+y volvé a correr `python sincronizar.py` desde la raiz.
