@@ -34,6 +34,7 @@ from walle_link import (
 )
 
 TELEMETRY_INTERVAL_S = 0.1
+DISTANCE_INTERVAL_S = 0.15   # igual que SONAR_PERIOD_MS del UNO
 
 
 # --------------------------------------------------------------------------
@@ -67,6 +68,7 @@ class LoopbackBridge:
         self.motors = (0, 0)
         self.servos = [90, 90, 90, 90]
         self.last_id = 0
+        self.last_distance_cm = 0
         self.log: list[str] = []
 
         self._peer: Optional[tuple[str, int]] = None
@@ -98,6 +100,7 @@ class LoopbackBridge:
 
     def _loop(self) -> None:
         last_telemetry = 0.0
+        last_distance = 0.0
         while not self._closing.is_set():
             try:
                 data, peer = self._sock.recvfrom(512)
@@ -120,6 +123,10 @@ class LoopbackBridge:
                 last_telemetry = now
                 self._send_telemetry(self._peer)
 
+            if self._peer is not None and now - last_distance >= DISTANCE_INTERVAL_S:
+                last_distance = now
+                self._send_distance(self._peer)
+
     def _send(self, peer: tuple[str, int], text: str) -> None:
         try:
             self._sock.sendto(text.encode("ascii"), peer)
@@ -131,6 +138,13 @@ class LoopbackBridge:
         rssi = -52 + self._rng.randint(-4, 4)
         text = f"{PROTO} T {uptime} {rssi} 1 {self.last_id} 0"
         self._send(peer, text)
+
+    def _send_distance(self, peer: tuple[str, int]) -> None:
+        # Como el UNO real: solo cuando hay eco valido. El valor oscila para
+        # que la prueba note si el cliente congela la primera lectura.
+        cm = 40 + (int(time.monotonic() * 10) % 60)
+        self.last_distance_cm = cm
+        self._send(peer, f"{PROTO} D {cm}")
 
     def _rtt(self) -> int:
         return int(self._delay_ms + self._rng.uniform(0.0, 2.0))
@@ -278,6 +292,22 @@ def run_loopback(args: argparse.Namespace) -> int:
                 "telemetria recibida",
                 tel is not None and tel.uno_ok,
                 f"rssi={tel.rssi} dBm" if tel else "sin telemetria",
+            )
+
+            cm = link.wait_distance(1.0)
+            report.check(
+                "distancia del sonar recibida",
+                cm is not None and cm > 0,
+                f"{cm} cm" if cm is not None else "sin lectura",
+            )
+
+            primera = link.distance_cm(1.0)
+            time.sleep(0.35)
+            segunda = link.distance_cm(1.0)
+            report.check(
+                "la distancia se refresca, no se congela",
+                primera is not None and segunda is not None and segunda != primera,
+                f"{primera} -> {segunda} cm",
             )
 
     print("== 2. el UNO rechaza: op desconocida ==")

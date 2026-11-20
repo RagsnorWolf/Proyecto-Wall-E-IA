@@ -57,6 +57,12 @@ jobs:
         working-directory: "Cerebro Wall-E/cerebro"
         run: python test_link.py --loopback
 
+      # El cerebro reactivo se prueba con un enlace falso y distancias
+      # inventadas: sin esto, el modo autonomo solo se probaria chocando.
+      - name: Pruebas del cerebro autónomo
+        working-directory: "Cerebro Wall-E/cerebro"
+        run: python test_autonomo.py
+
       - name: El cliente UDP importa sin dependencias
         working-directory: "Cerebro Wall-E/cerebro"
         run: python -c "import walle_link; print('walle_link OK')"
@@ -186,7 +192,9 @@ jobs:
       - name: Cerebro suelto
         if: matrix.carpeta == 'Cerebro Wall-E'
         working-directory: ${{ env.SOLO }}/cerebro
-        run: python test_link.py --loopback
+        run: |
+          python test_link.py --loopback
+          python test_autonomo.py
 
       - name: Simulador suelto
         if: matrix.carpeta == 'Simulador Wall-E'

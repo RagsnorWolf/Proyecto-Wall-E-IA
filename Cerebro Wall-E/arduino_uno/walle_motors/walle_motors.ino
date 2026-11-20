@@ -1,5 +1,5 @@
 /*
- * WALL-E — Arduino UNO: motores y servos.
+ * WALL-E — Arduino UNO: motores, servos y sensor de distancia.
  *
  * Este sketch NO piensa. Recibe lineas por SoftwareSerial desde el ESP32,
  * las ejecuta y contesta siempre. Toda la inteligencia vive en la PC.
@@ -8,12 +8,14 @@
  *   entrada:  <id>,<op>,<a>,<b>\n      op = M | V | X | P
  *   salida:   <id>,OK,<v1>,<v2>\n
  *             <id>,ER,<codigo>,<detalle>\n
+ *             <id>,D,<cm>,<0>\n       distancia, espontanea, sin ACK
  *
  * Mapa de pines y por que:
  *   Timer0 -> millis()      : no se toca (pines 5 y 6 quedan para servos)
  *   Timer1 -> Servo.h       : pines 9 y 10 para servos, no PWM de motor
  *   Timer2 -> PWM de motor  : pines 3 (ENB) y 11 (ENA)
  *   SoftwareSerial          : 12 (RX) y 13 (TX), libres de todo lo anterior
+ *   HC-SR04                 : A0 (TRIG) y A1 (ECHO), analogos usados como digital
  */
 
 #include <SoftwareSerial.h>
@@ -23,6 +25,7 @@
 // Configuracion
 // --------------------------------------------------------------------------
 #define USE_ENCODERS 0        // 1 para contar pulsos en A2/A3
+#define USE_SONAR 1           // 1 si hay un HC-SR04 en A0/A1
 
 static const uint8_t PIN_SS_RX = 12;   // <- TX del ESP32 (GPIO17), directo
 static const uint8_t PIN_SS_TX = 13;   // -> RX del ESP32 (GPIO16), con divisor 1k/2k
@@ -36,12 +39,24 @@ static const uint8_t PIN_IN4 = 2;
 
 static const uint8_t PIN_SERVO[4] = {5, 6, 9, 10};
 
+static const uint8_t PIN_TRIG = A0;
+static const uint8_t PIN_ECHO = A1;
+
 static const uint32_t BAUD_LINK = 57600;
 static const uint32_t LINK_TIMEOUT_MS = 500;   // sin linea valida -> parada
 static const uint16_t LINE_MAX = 48;
 static const int16_t  MOTOR_DEADBAND = 60;     // por debajo de 6% el motor no arranca
 static const int16_t  SERVO_MIN_DEG = 0;
 static const int16_t  SERVO_MAX_DEG = 180;
+
+// El muestreo del sonar bloquea con pulseIn, y mientras bloquea el buffer de
+// SoftwareSerial (64 bytes) se puede desbordar y perder una linea del ESP32.
+// Con 10 ms de espera maxima son ~1,7 m de alcance y ~3 lineas perdidas de
+// margen. Se muestrea cada 150 ms: el ACK perdido se reintenta, la distancia
+// vieja no.
+static const uint32_t SONAR_PERIOD_MS = 150;
+static const uint16_t SONAR_TIMEOUT_US = 10000;
+static const int16_t  SONAR_MAX_CM = 400;
 
 // --------------------------------------------------------------------------
 // Estado
@@ -61,6 +76,14 @@ static bool servoAttached[4] = {false, false, false, false};
 
 #if USE_ENCODERS
 volatile int32_t encCount[2] = {0, 0};
+#endif
+
+#if USE_SONAR
+// Contador propio para los mensajes espontaneos de distancia. El UNO descarta
+// id <= 0, asi que la telemetria necesita id valido igual que la parada.
+static int32_t sonarId = 1500000000;
+static uint32_t lastSonarMs = 0;
+static int16_t lastSonarCm = -1;      // -1 = sin lectura valida
 #endif
 
 // --------------------------------------------------------------------------
@@ -279,6 +302,45 @@ ISR(PCINT1_vect) {
 #endif
 
 // --------------------------------------------------------------------------
+// Sensor de distancia (HC-SR04)
+// --------------------------------------------------------------------------
+#if USE_SONAR
+/* Una lectura cruda. Devuelve centimetros, o -1 si no hay eco. */
+static int16_t readSonarCm() {
+  digitalWrite(PIN_TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(PIN_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(PIN_TRIG, LOW);
+
+  uint32_t us = pulseIn(PIN_ECHO, HIGH, SONAR_TIMEOUT_US);
+  if (us == 0) return -1;                       // sin eco: fuera de alcance
+
+  // 343 m/s -> 58 us por centimetro ida y vuelta.
+  int32_t cm = (int32_t)(us / 58UL);
+  if (cm > SONAR_MAX_CM) return -1;
+  return (int16_t)cm;
+}
+
+/* Emite <id>,D,<cm>,<0>. El ESP32 lo reconoce por la 'D' y lo reenvia al PC
+   sin esperar ACK: es telemetria, no una orden. */
+static void pollSonar() {
+  uint32_t now = millis();
+  if ((uint32_t)(now - lastSonarMs) < SONAR_PERIOD_MS) return;
+  lastSonarMs = now;
+
+  int16_t cm = readSonarCm();
+  if (cm < 0) return;                           // sin eco: no se manda basura
+  lastSonarCm = cm;
+
+  link.print(sonarId++);
+  link.print(F(",D,"));
+  link.print(cm);
+  link.println(F(",0"));
+}
+#endif
+
+// --------------------------------------------------------------------------
 // Setup / loop
 // --------------------------------------------------------------------------
 void setup() {
@@ -293,6 +355,12 @@ void setup() {
   link.begin(BAUD_LINK);
   link.setTimeout(20);
 
+#if USE_SONAR
+  pinMode(PIN_TRIG, OUTPUT);
+  pinMode(PIN_ECHO, INPUT);
+  digitalWrite(PIN_TRIG, LOW);
+#endif
+
 #if USE_ENCODERS
   pinMode(A2, INPUT_PULLUP);
   pinMode(A3, INPUT_PULLUP);
@@ -305,6 +373,10 @@ void setup() {
 
 void loop() {
   pollLink();
+
+#if USE_SONAR
+  pollSonar();
+#endif
 
   // Dead-man: si el ESP32 deja de hablar, se frena solo. El ESP32 hace lo
   // mismo un segundo despues si la PC desaparece.

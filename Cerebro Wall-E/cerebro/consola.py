@@ -82,6 +82,9 @@ def parse_order(text: str):
     if re.fullmatch(r"(estado|status|telemetria|info)", t):
         return ("status", 0.0)
 
+    if re.fullmatch(r"(distancia|sensor|sonar|que ves)", t):
+        return ("distance", 0.0)
+
     m = re.fullmatch(r"(avanza|avanzar|adelante)\s+" + NUM + r"\s*(m|metro|metros|cm|centimetros)?", t)
     if m:
         value = _num(m.group(2))
@@ -228,6 +231,13 @@ class Consola:
         )
         print(f"  enlace: {self.link.stats}")
 
+    def distance(self) -> None:
+        cm = self.link.distance_cm(1.0)
+        if cm is None:
+            print("  sin lectura del sonar (o esta vieja)")
+            return
+        print(f"  obstaculo al frente: {cm} cm")
+
 
 # --------------------------------------------------------------------------
 # Bucle
@@ -238,6 +248,9 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="puerto UDP")
     parser.add_argument(
         "--pwm", type=int, default=CRUISE_PWM, help="PWM de crucero (por defecto: %(default)s)"
+    )
+    parser.add_argument(
+        "--status", action="store_true", help="imprime el estado del enlace y sale"
     )
     args = parser.parse_args()
 
@@ -255,9 +268,19 @@ def main() -> int:
             print(f"  rssi={tel.rssi} dBm  uno_ok={tel.uno_ok}")
         if tel is not None and not tel.uno_ok:
             print("  OJO: el ESP32 responde pero el UNO no. Revisar el cable serie.")
+
+        if args.status:
+            # El sonar emite a 6,6 Hz: hay que esperar la primera lectura, no
+            # leer el hueco de antes de que el UNO muestreara.
+            cm = link.wait_distance(1.0)
+            print(f"  distancia: {cm} cm" if cm is not None else "  distancia: sin lectura")
+            print(f"  enlace: {link.stats}")
+            return 0
+
         print()
         print("Ordenes: avanza 2 metros | retrocede 1 m | gira 90 grados |")
-        print("         detente | izquierda | derecha | servo 0 45 | estado | salir")
+        print("         detente | izquierda | derecha | servo 0 45 |")
+        print("         distancia | estado | salir")
         print()
 
         consola = Consola(link, args.pwm)
@@ -282,6 +305,8 @@ def main() -> int:
                     consola.stop()
                 elif action == "status":
                     consola.status()
+                elif action == "distance":
+                    consola.distance()
                 elif action == "forward":
                     consola.forward(value)
                 elif action == "backward":

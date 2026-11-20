@@ -14,6 +14,7 @@ cómo saber que cada paso salió bien antes de pasar al siguiente.
 | ESP32 | Dev Module, cualquier variante con WiFi |
 | L298N | Puente H para las dos orugas |
 | 4 servos | Con fuente aparte, no del regulador del UNO |
+| 1 HC-SR04 | Sensor de distancia. Sin esto no hay modo autónomo |
 | 2 resistencias | 1 kΩ y 2 kΩ (el divisor del puerto serie) |
 | Batería | 7,4 V o 9 V para los motores |
 
@@ -105,6 +106,27 @@ El divisor va del lado del UNO, porque el UNO habla en 5 V y el ESP32 aguanta
 Los servos van con **fuente propia** y la masa unida a la del UNO. Cuatro
 servos colgados del regulador del UNO lo reinician en el primer movimiento.
 
+### UNO ↔ HC-SR04 (el ojo)
+
+| UNO | HC-SR04 |
+|---|---|
+| A0 | TRIG |
+| A1 | ECHO |
+| 5V | VCC |
+| GND | GND |
+
+Los dos pines de señal van a **analógicos usados como digitales**: los digitales
+ya están todos tomados por motores, servos y el puerto serie.
+
+Pegarlo arriba del servo del cuello (el de D5), apuntando al frente, para que
+pueda barrer. Si no lo montás en el servo, dejalo fijo al frente y avisale a la
+computadora: en `cerebro/autonomo.py`, `SONAR_SERVO = -1`.
+
+**Cómo saber que anda:** con el robot levantado y la mano a 30 cm del sensor,
+en el Monitor Serie del ESP32 tienen que aparecer líneas `WALLE/1 D 30` a cada
+rato. Si no aparece ninguna, revisar que `USE_SONAR` esté en `1` en el sketch
+del UNO y que los cables estén en A0/A1 (no en D0/D1).
+
 ---
 
 ## Paso 5 — Probar sin el robot
@@ -150,10 +172,10 @@ orugas giran y los servos se mueven, está listo.
 
 ---
 
-## Paso 7 — Hablarle al robot en castellano
+## Paso 7 — Hablarle al robot en castellano (modo manual)
 
-Esta es la forma más simple. **Doble clic en `Hablar con WALL-E.bat`** (está en
-la carpeta `Cerebro Wall-E`). Pide la IP la primera vez, la guarda en
+**Doble clic en `WALL-E Cerebro Robot.bat`** (está en la carpeta `Cerebro Wall-E`)
+y elegir `[1] Modo manual`. Pide la IP la primera vez, la guarda en
 `ip_robot.txt`, y a partir de ahí abre directo el prompt.
 
 O a mano:
@@ -182,7 +204,7 @@ Conectado a 192.168.1.50  (rtt 12 ms)
 
 Órdenes que entiende: `avanza 2 metros`, `avanza 50 cm`, `retrocede 1 m`,
 `gira 90 grados` (negativo gira a la derecha), `detente`, `izquierda`,
-`derecha`, `servo 0 45`, `estado`, `salir`.
+`derecha`, `servo 0 45`, `distancia`, `estado`, `salir`.
 
 **Ojo con las distancias.** El robot no tiene encoders: «avanza 2 metros» es en
 realidad «mueve las orugas este tiempo a esta velocidad». Si las ruedas patinan
@@ -199,7 +221,60 @@ Para calibrar: pedir `avanza 2 metros`, medir con cinta, y corregir
 
 ---
 
-## Paso 8 — Manejar el robot desde el simulador
+## Paso 8 — Modo autónomo (que se mueva solo)
+
+Este es el paso que hacía falta: el robot decide solo sin que nadie le hable.
+
+**Antes de arrancar:** dejalo en el piso, con el sensor apuntando al frente y
+por lo menos dos metros libres alrededor. Las ruedas se van a mover de verdad.
+
+Doble clic en `WALL-E Cerebro Robot.bat` y elegir `[2] Modo autónomo`.
+
+O a mano:
+
+```bash
+cd "Cerebro Wall-E\cerebro"
+python autonomo.py --host 192.168.1.50
+```
+
+**Cómo saber que salió bien:** va a imprimir algo así mientras camina.
+
+```
+Conectado a 192.168.1.50  (rtt 12 ms)
+
+autonomo activo. Ctrl+C para parar.
+
+  180 cm  ->  avanza a 620
+  174 cm  ->  avanza a 620
+  ...
+  48 cm  ->  avanza a 470
+  20 cm  ->  avanza a 380
+  obstaculo: escape hacia la izquierda
+    paso 1: frente a 130 cm
+```
+
+Qué hace en cada caso:
+
+| Lo que ve el sensor | Qué hace el robot |
+|---|---|
+| más de 120 cm | avanza a velocidad de crucero |
+| entre 65 y 120 cm | va bajando la velocidad de a poco |
+| entre 22 y 65 cm | avanza despacio, sin frenar en seco |
+| 22 cm o menos | frena, barre con el servo y escapa por el lado más libre |
+| no ve nada por más de 1,2 s | se queda quieto |
+
+**Por qué no frena de golpe:** la velocidad baja de a poco con la distancia.
+Un freno seco lejos del obstáculo es lo que hacía el simulador antes de
+arreglarlo, y se ve mal.
+
+**Ojo:** esto **no** es el modelo entrenado del simulador. Ese modelo mira 36
+rayos de LiDAR que el robot físico no tiene. Esto es un cerebro reactivo simple,
+hecho a mano, que funciona con lo que hay. Cuando se compre un LiDAR giratorio,
+se cambia `autonomo.py` por el cargador del modelo y listo.
+
+---
+
+## Paso 9 — Manejar el robot desde el simulador
 
 En la carpeta del simulador, doble clic en `WALL-E Robot Real.bat`. La primera
 vez pide la IP, la guarda, y a partir de ahí arranca solo.
@@ -220,6 +295,9 @@ controlador también salen por WiFi al robot.
 | Los servos tiemblan o el UNO se reinicia | Los servos están colgados del regulador del UNO: hace falta fuente aparte |
 | Se mueve a tirones | Bajar `UNO_BAUD` a 38400 en `config.h` y en el sketch del UNO |
 | El robot se frena solo a los 2 segundos | Es el dead-man: la computadora dejó de mandar. Revisar el WiFi |
+| `distancia: sin lectura` siempre | Sonar desconectado, `USE_SONAR` en `0`, o los cables en D0/D1 en vez de A0/A1 |
+| El autónomo gira sin parar | El sonar está midiendo el propio chasis: correrlo hacia adelante del paragolpes |
+| El autónomo avanza y choca igual | Superficie blanda o en ángulo: el HC-SR04 pierde el eco. Probar con una caja de cartón duro de frente |
 
 ---
 

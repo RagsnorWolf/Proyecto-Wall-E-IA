@@ -58,7 +58,10 @@ ERROR_CODES = {
 }
 
 Ack = namedtuple("Ack", "id v1 v2 rtt_ms")
-Telemetry = namedtuple("Telemetry", "uptime_ms rssi uno_ok last_id queue age_s")
+Telemetry = namedtuple(
+    "Telemetry",
+    "uptime_ms rssi uno_ok last_id queue age_s distance_cm sonar_age_s",
+)
 
 
 class LinkError(RuntimeError):
@@ -111,6 +114,8 @@ class WalleLink:
         self._lock = threading.Lock()
         self._pending: dict[int, dict] = {}
         self._telemetry: Optional[Telemetry] = None
+        self._distance_cm: Optional[int] = None
+        self._sonar_at = 0.0
         self._ids = itertools.count(1)
 
         self.stats = {
@@ -188,13 +193,44 @@ class WalleLink:
         return self._exchange("P", 0, 0)
 
     def telemetry(self, max_age_s: float = 1.5) -> Optional[Telemetry]:
-        """Ultima telemetria recibida, o None si esta vieja o no hubo."""
+        """Ultima telemetria recibida, o None si esta vieja o no hubo.
+
+        `age_s` y `sonar_age_s` guardan el instante monotonic de recepcion, no
+        una edad: sirven para calcular la edad con time.monotonic().
+        """
         snap = self._telemetry
         if snap is None:
             return None
         if time.monotonic() - snap.age_s > max_age_s:
             return None
         return snap
+
+    def distance_cm(self, max_age_s: float = 0.6) -> Optional[int]:
+        """Distancia del sonar en centimetros, o None si no hay lectura fresca.
+
+        El UNO muestrea cada 150 ms y solo manda eco valido: un None significa
+        "sin lectura", nunca "cero". Tratarlo como cero frena el robot de
+        golpe contra la nada.
+        """
+        if self._distance_cm is None:
+            return None
+        if time.monotonic() - self._sonar_at > max_age_s:
+            return None
+        return self._distance_cm
+
+    def wait_distance(self, timeout_s: float = 0.6) -> Optional[int]:
+        """Espera una lectura POSTERIOR a esta llamada.
+
+        Necesario despues de mover el servo del sonar: la lectura vieja es de
+        otra direccion y usarla hace que el robot esquive fantasmas.
+        """
+        start = time.monotonic()
+        deadline = start + timeout_s
+        while time.monotonic() < deadline:
+            if self._sonar_at > start:
+                return self._distance_cm
+            time.sleep(0.01)
+        return None
 
     def alive(self) -> bool:
         try:
@@ -275,6 +311,8 @@ class WalleLink:
             try:
                 if fields[0] == "T":
                     self._on_telemetry(fields[1:])
+                elif fields[0] == "D":
+                    self._on_distance(fields[1:])
                 else:
                     self._on_ack(fields)
             except (ValueError, IndexError):
@@ -291,7 +329,19 @@ class WalleLink:
             last_id=int(fields[3]),
             queue=int(fields[4]),
             age_s=time.monotonic(),
+            distance_cm=self._distance_cm,
+            sonar_age_s=self._sonar_at,
         )
+
+    def _on_distance(self, fields: list[str]) -> None:
+        # D <cm>
+        if not fields:
+            return
+        cm = int(fields[0])
+        if cm < 0:
+            return              # -1 es "sin eco": se descarta, no es cero
+        self._distance_cm = cm
+        self._sonar_at = time.monotonic()
 
     def _on_ack(self, fields: list[str]) -> None:
         # <id> OK <v1> <v2> <rtt>   |   <id> ER <codigo> <rtt>

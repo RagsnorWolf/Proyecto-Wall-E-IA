@@ -67,6 +67,23 @@ WALLE/1 T <uptime_ms> <rssi> <uno_ok> <ultimo_id> <cola>
 La telemetría va a la última IP que mandó una orden. Si no hay ninguna, no se
 emite.
 
+### 1.4 ESP32 → PC (distancia del sonar, sin pedirla)
+
+```
+WALLE/1 D <cm>
+```
+
+| Campo | Qué es |
+|---|---|
+| `cm` | Distancia en centímetros, entero. Siempre ≥ 0. |
+
+Sale sólo cuando el UNO tiene una lectura **válida**. Un eco perdido no genera
+trama: el silencio significa «no sé», nunca «cero». Confundir las dos cosas
+frena el robot de golpe contra la nada.
+
+No lleva `id` ni espera ACK: es telemetría, no una orden. Llega a unos 6,6 Hz
+(el UNO muestrea cada 150 ms).
+
 ---
 
 ## 2. ESP32 ⇄ UNO (UART 57600 8N1)
@@ -103,6 +120,20 @@ Códigos de error del UNO:
 
 El UNO contesta **siempre**, incluso cuando rechaza. Un `ER` es prueba de vida
 igual que un `OK`.
+
+### 2.3 UNO → ESP32 (distancia, espontánea)
+
+```
+<id>,D,<cm>,0\n
+```
+
+Mismo formato que un ACK para que el parser del ESP32 no tenga que adivinar
+antes de partir la línea. La `D` en el campo de estado lo distingue: el ESP32
+lo reconoce, lo reenvía al PC como `WALLE/1 D <cm>` y **no** lo busca en la cola
+de pendientes, porque no es la respuesta de ninguna orden.
+
+El `id` lo genera el UNO con un contador propio que arranca en 1 500 000 000,
+fuera del rango que usa el PC. Así no colisiona nunca con un id pendiente.
 
 ---
 
@@ -144,3 +175,48 @@ enseguida en vez de acumular latencia.
 
 **Llega basura al puerto UDP.** Se descarta si no empieza con `WALLE/1` o si
 algún campo no parsea. Nunca se contesta a basura: evita bucles de rebote.
+
+---
+
+## 5. El sensor de distancia
+
+Un HC-SR04 colgado del UNO en `A0` (TRIG) y `A1` (ECHO). Analógicos usados como
+digitales: los pines digitales ya están todos tomados por motores, servos y
+SoftwareSerial.
+
+### Por qué muestrea el UNO y no el ESP32
+
+El UNO ya está en el camino de la respuesta: si el sensor colgara del ESP32, el
+PC tendría dos fuentes de verdad y dos relojes. Colgado del UNO, la distancia
+viaja por el mismo cable que el ACK y llega con la misma latencia.
+
+### Por qué cada 150 ms
+
+`pulseIn` bloquea hasta 10 ms esperando el eco. Mientras bloquea, el buffer de
+64 bytes de `SoftwareSerial` se puede desbordar y perder una línea del ESP32. A
+57600 baudios entran unos 576 bytes en esos 10 ms — más que el buffer entero.
+Muestrear cada 150 ms deja el 93 % del tiempo libre y el ACK perdido se
+reintenta, mientras que una distancia vieja no se recupera.
+
+Si el enlace empieza a perder líneas, la salida es bajar `SONAR_PERIOD_MS` a 250
+o bajar los dos lados a 38400 baudios.
+
+### Montaje en el servo
+
+El sonar va en el servo 0. El cerebro (`autonomo.py`) lo barre a ±55° para
+elegir por dónde escapar cuando hay un obstáculo al frente. Si el sonar va fijo,
+`SONAR_SERVO = -1` en `autonomo.py` y el robot elige el lado alternando.
+
+### Alcance real
+
+| Situación | Lectura |
+|---|---|
+| Pared lisa y perpendicular a menos de 2 m | fiable, ±1 cm |
+| Superficie blanda, tela, espuma | eco débil: puede no haber lectura |
+| Ángulo mayor a ~15° | el eco se va: `-1`, no se emite trama |
+| Más de 4 m | fuera de rango: `-1` |
+
+Un `-1` significa «no sé». El cerebro lo trata como tal: se queda quieto si dura
+más de 1,2 s, pero no frena de golpe por una lectura perdida.
+
+---

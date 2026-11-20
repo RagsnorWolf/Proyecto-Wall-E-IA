@@ -145,7 +145,7 @@ static void connectWifi() {
 // Recepcion del UNO
 // --------------------------------------------------------------------------
 static void handleUnoLine(char *line) {
-  // <id>,OK,<v1>,<v2>   |   <id>,ER,<codigo>,<detalle>
+  // <id>,OK,<v1>,<v2>   |   <id>,ER,<codigo>,<detalle>   |   <id>,D,<cm>,<0>
   char *comma1 = strchr(line, ',');
   if (comma1 == NULL) return;
   *comma1 = '\0';
@@ -167,6 +167,18 @@ static void handleUnoLine(char *line) {
     v2 = atol(comma3 + 1);
   }
   v1 = atol(v1s);
+
+  // Telemetria del sensor: no es la respuesta de una orden, no tiene ranura.
+  // Se reenvia al PC tal cual y se sigue.
+  if (status[0] == 'D' && status[1] == '\0') {
+    if (!pcKnown) return;
+    char out[40];
+    snprintf(out, sizeof(out), "WALLE/1 D %ld", (long)v1);
+    udp.beginPacket(pcAddr, pcPort);
+    udp.write((const uint8_t *)out, strlen(out));
+    udp.endPacket();
+    return;
+  }
 
   Pending *slot = findPending(id);
   if (slot == NULL) return;   // ACK de algo que ya se contesto: se ignora
