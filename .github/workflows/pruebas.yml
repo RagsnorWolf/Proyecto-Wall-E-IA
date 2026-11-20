@@ -3,6 +3,9 @@ name: pruebas
 # Lo que se verifica acá tiene que poder correr sin GPU, sin PyBullet y sin
 # descargar 2 GB de PyTorch. El simulador completo se prueba a mano; esto
 # atrapa lo que se rompe en silencio: sintaxis, enlaces y lanzadores.
+#
+# Los chequeos viven en tools/verificar.py y no como heredoc: `python - <<'PY'`
+# es sintaxis de bash y el runner de Windows usa PowerShell.
 
 on:
   push:
@@ -49,14 +52,14 @@ jobs:
           python-version: "3.12"
 
       # test_link.py es stdlib pura a propósito: el protocolo se puede probar
-      # sin hardware y sin dependencias. El --loopback levanta un puente falso.
+      # sin hardware y sin dependencias. --loopback levanta un puente falso.
       - name: Pruebas del enlace en loopback
         working-directory: "Cerebro Wall-E/cerebro"
         run: python test_link.py --loopback
 
       - name: El cliente UDP importa sin dependencias
         working-directory: "Cerebro Wall-E/cerebro"
-        run: python -c "import walle_link; print('walle_link', walle_link.__name__)"
+        run: python -c "import walle_link; print('walle_link OK')"
 
   simulador:
     name: Simulador — entorno y modelo
@@ -69,35 +72,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      # OBS_DIM no es un literal: es 14 + SENSOR_COUNT + OBS_EXTRAS. Se evalúa
-      # contra las constantes del módulo, sin importarlo (importar pide
-      # pybullet y 2 GB de torch, que no van en CI).
-      - name: El entorno declara la observación de 58
-        working-directory: "Simulador Wall-E"
-        run: |
-          python - <<'PY'
-          import ast, pathlib, sys
-          tree = ast.parse(pathlib.Path("walle_env_v3.py").read_text(encoding="utf-8"))
-          constantes = {}
-          for nodo in tree.body:
-              if isinstance(nodo, ast.Assign) and len(nodo.targets) == 1:
-                  t = nodo.targets[0]
-                  if isinstance(t, ast.Name):
-                      try:
-                          constantes[t.id] = ast.literal_eval(nodo.value)
-                      except Exception:
-                          constantes.setdefault(t.id, ast.unparse(nodo.value))
-          print("constantes:", {k: v for k, v in constantes.items() if k in
-                ("OBS_DIM", "OBS_EXTRAS", "SENSOR_COUNT", "LIDAR_RAYS")})
-          expr = constantes.get("OBS_DIM")
-          if expr is None:
-              sys.exit("no se encontro OBS_DIM")
-          # Sólo aritmética sobre nombres conocidos: nada de exec arbitrario.
-          valor = eval(str(expr), {"__builtins__": {}}, dict(constantes))
-          if valor != 58:
-              sys.exit(f"OBS_DIM deberia ser 58, evalua a {valor}")
-          print(f"OBS_DIM = {valor} OK")
-          PY
+      - name: La observación del entorno V5 es de 58
+        run: python tools/verificar.py obs
 
       - name: Las tres políticas están en el repo
         working-directory: "Simulador Wall-E"
@@ -136,62 +112,44 @@ jobs:
         run: python -c "from brain.llm import Ollama; print('Ollama OK')"
 
       - name: La personalidad existe y no está vacía
-        working-directory: "Asistente IA Wall-E/Modelo AI"
-        run: |
-          python - <<'PY'
-          import pathlib, sys
-          p = pathlib.Path("prompts/system.md")
-          if not p.exists():
-              sys.exit("FALTA prompts/system.md")
-          texto = p.read_text(encoding="utf-8")
-          if len(texto) < 200:
-              sys.exit(f"system.md parece vacio ({len(texto)} caracteres)")
-          print(f"system.md OK ({len(texto)} caracteres)")
-          PY
+        run: python tools/verificar.py agente
 
       - name: El build servido de la cabina está en el repo
-        run: |
-          test -s "Asistente IA Wall-E/Pagina Web/cockpit/static/index.html" || { echo "FALTA el build"; exit 1; }
-          echo "build OK"
+        working-directory: "Asistente IA Wall-E/Pagina Web/cockpit"
+        run: python -c "import pathlib,sys; p=pathlib.Path('static/index.html'); sys.exit(0 if p.exists() and p.stat().st_size>0 else 'FALTA el build')"
 
   lanzadores:
     name: Lanzadores .bat sanos
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Un BOM o un acento en un .bat rompe cmd de formas raras de diagnosticar.
+      - name: Verificar los .bat
+        run: python tools/verificar.py bat
+
+  documentacion:
+    name: Cada carpeta se explica sola
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      # Un BOM o un acento en un .bat rompe cmd de formas raras de diagnosticar.
-      # ASCII puro, sin BOM, sin rutas absolutas clavadas.
-      - name: Verificar los .bat
-        run: |
-          python - <<'PY'
-          import pathlib, sys
-          fallos = []
-          bats = list(pathlib.Path(".").rglob("*.bat"))
-          if not bats:
-              sys.exit("no se encontro ningun .bat")
-          for p in bats:
-              datos = p.read_bytes()
-              if datos.startswith(b"\xef\xbb\xbf"):
-                  fallos.append(f"{p}: tiene BOM")
-              altos = [b for b in datos if b > 127]
-              if altos:
-                  fallos.append(f"{p}: {len(altos)} bytes no ASCII")
-              texto = datos.decode("utf-8", "replace")
-              for mala in ("E:\\", "C:\\Users\\"):
-                  if mala in texto:
-                      fallos.append(f"{p}: ruta absoluta clavada ({mala})")
-              if p.name not in ("INSTALAR.bat",) and "%~dp0" not in texto and "cd /d" not in texto:
-                  fallos.append(f"{p}: no resuelve su ruta con %~dp0")
-              print(f"OK {p}")
-          if fallos:
-              print("\nFALLOS:")
-              for f in fallos:
-                  print(" -", f)
-              sys.exit(1)
-          print(f"\n{len(bats)} lanzadores sanos")
-          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: README y 00-CONTEXTO en las tres
+        run: python tools/verificar.py contexto
 
   carpeta-suelta:
     name: Cada carpeta se sostiene sola
@@ -244,5 +202,4 @@ jobs:
       - name: Agente suelto
         if: matrix.carpeta == 'Asistente IA Wall-E'
         working-directory: ${{ env.SOLO }}/Modelo AI
-        run: |
-          python -c "from brain.llm import Ollama; print('cabina OK')"
+        run: python -c "from brain.llm import Ollama; print('cabina OK')"
