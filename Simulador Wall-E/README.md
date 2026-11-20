@@ -12,6 +12,7 @@ Simulador Wall-E\
   interactive_walle.py        <- la GUI y el controlador
   walle_env_v3.py             <- el entorno V6: observacion de 66 numeros
   tools_diag_lidar.py         <- diagnostico del sensor contra la geometria real
+  evaluar_v6.py               <- banco de pruebas: mide si el modelo aprendio
   test_v4_smoke.py            <- prueba rapida de que el entorno no miente
   models\                     <- las politicas entrenadas (.zip)
   material_0.png              <- textura real del modelo, 2048x2048
@@ -104,3 +105,32 @@ El diagnóstico imprime cinco secciones: distancia desde el paragolpes (error
 < 1 mm), objetos de 8 a 40 cm, reparto del abanico, el anillo completo y la
 forma de la observación. Si algo vuelve a romperse, falla con el número exacto
 en vez de entrenar un robot ciego durante horas.
+
+## Medir si el cerebro aprendió
+
+Entrenar no es aprender. `evaluar_v6.py` corre varios episodios con semillas
+fijas y saca una tabla comparable entre versiones:
+
+```bash
+.venv\Scripts\python.exe evaluar_v6.py --episodes 10 --obstacles 8
+.venv\Scripts\python.exe evaluar_v6.py --compare v6 v5 v4
+```
+
+```
+modelo                 dist. neta         camino  contactos  t. contacto ...
+v6                          8.42±1.10      14.20±2.30      1.20±0.60       3.1% ...
+```
+
+| Columna | Qué dice |
+|---|---|
+| distancia neta | cuánto se alejó del punto de partida |
+| camino | suma de desplazamientos, aunque vuelva sobre sus pasos |
+| contactos | eventos de choque, no pasos |
+| t. contacto | % de pasos pegados a algo |
+| atascos | veces que se quedó sin moverse 0.75 s |
+| chunks | celdas de 1 m descubiertas |
+| vel. media | m/s reales sobre el eje del chasis |
+| recompensa | retorno del episodio, comparable con el entrenamiento |
+
+Con `--compare` usa **las mismas semillas** para todos los modelos: la
+diferencia que se ve es del modelo, no del escenario.

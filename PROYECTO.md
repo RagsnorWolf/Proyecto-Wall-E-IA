@@ -416,6 +416,31 @@ El panel se lee como una frase: *frente 0.42 m · izq 2.10 · der 2.08 m ·
 hueco 148° a 3.40 m · objetivo +12°/1.90 m · vel +0.84 m/s · libre 61%*. Si el
 robot frena sin motivo aparente, ese renglón dice por qué.
 
+### 6.5 Cómo se mide si el cerebro aprendió
+
+Entrenar no es aprender. `evaluar_v6.py` corre N episodios con **semillas
+fijas** y saca una tabla que se compara entre versiones sin adivinar:
+
+```
+modelo                 dist. neta         camino  contactos  t. contacto ...
+v6                          8.42±1.10      14.20±2.30      1.20±0.60       3.1% ...
+```
+
+| Métrica | Qué mide | Por qué importa |
+|---|---|---|
+| distancia neta | cuánto se alejó del punto de partida | es el objetivo del robot: explorar |
+| camino | suma de desplazamientos | distingue explorar de dar vueltas |
+| contactos | eventos de choque | una vez por evento, no por paso |
+| t. contacto | % de pasos pegados a algo | si es alto, el robot empuja en vez de rodear |
+| atascos | veces que se quedó sin moverse 0.75 s | el fallo más común en pasillos |
+| chunks | celdas de 1 m descubiertas | cobertura real del terreno |
+| vel. media | m/s sobre el eje del chasis | detecta el "avanza pero no avanza" |
+| recompensa | retorno del episodio | comparable con el entrenamiento |
+
+`--compare v6 v5 v4` usa las mismas semillas para todos: la diferencia es del
+modelo, no del escenario. Sin esto, comparar dos `.zip` es mirar la recompensa
+de entrenamiento, que miente cuando cambia el entorno.
+
 ---
 
 ## 7. Estado actual
