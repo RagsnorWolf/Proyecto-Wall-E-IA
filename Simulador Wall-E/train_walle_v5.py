@@ -134,6 +134,15 @@ def main() -> None:
             "(estable; el más lento). 'subproc' reparte en procesos hijos."
         ),
     )
+    parser.add_argument(
+        "--auto_resume",
+        action="store_true",
+        help=(
+            "Si hay checkpoints en output_dir\\checkpoints, arranca desde el "
+            "más reciente en vez de empezar de cero. Pensado para relanzar "
+            "tras un corte sin perder las horas ya gastadas."
+        ),
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -165,6 +174,22 @@ def main() -> None:
     # a mano, y así el modelo guardado se usa en la GUI con la observación
     # cruda, sin arrastrar estadísticas de normalización.
     env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)
+
+    if args.auto_resume and not args.resume:
+        # Un corte no debería costar las horas ya invertidas. Se busca el
+        # checkpoint más reciente y se sigue desde ahí; si no hay ninguno, el
+        # entrenamiento arranca de cero como siempre.
+        ckpt_dir = os.path.join(args.output_dir, "checkpoints")
+        candidatos = []
+        if os.path.isdir(ckpt_dir):
+            candidatos = [
+                os.path.join(ckpt_dir, nombre)
+                for nombre in os.listdir(ckpt_dir)
+                if nombre.endswith(".zip") and nombre.startswith("walle_v6_")
+            ]
+        if candidatos:
+            args.resume = max(candidatos, key=os.path.getmtime)
+            print(f"[TRAIN_V5] auto_resume: {os.path.basename(args.resume)}")
 
     if args.resume and os.path.exists(args.resume):
         print(f"[TRAIN_V5] Cargando modelo existente: {args.resume}")

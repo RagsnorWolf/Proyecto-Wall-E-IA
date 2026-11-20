@@ -29,10 +29,11 @@ if "%STEPS%"=="" set STEPS=600000
 
 echo Entrenando %STEPS% pasos.
 echo Checkpoints cada 10000 pasos en models\checkpoints
+echo Si ya hay checkpoints, reanuda desde el mas reciente.
 echo Modelo final en models\walle_ppo_model_v6.zip
 echo.
 
-%PY% -u train_walle_v5.py --timesteps %STEPS% --workers 2 --vec dummy
+%PY% -u train_walle_v5.py --timesteps %STEPS% --workers 2 --vec dummy --auto_resume
 
 echo.
 echo Entrenamiento terminado. Modelo en models\walle_ppo_model_v6.zip
