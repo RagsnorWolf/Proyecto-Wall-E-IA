@@ -14,7 +14,7 @@ Características V5:
 - El abanico de 36 rayos es denso al frente (24 rayos en ±40°, uno cada 3,5°)
   y más abierto a los costados (6 por lado hasta ±90°). Un reparto uniforme
   gastaba 5° por rayo y dejaba el cono de decisión con muy poca resolución.
-- Observación de 58 dimensiones:
+- Observación de 66 dimensiones:
     [x, y, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz,
      goal, goal_bearing,
      s0..s35,            <- 36 rayos del abanico, normalizados [0,1]
@@ -22,7 +22,14 @@ Características V5:
      distancia_minima,   <- 1 - min(anillo 72)/alcance
      obst_sin, obst_cos, <- rumbo del obstáculo más cercano
      libre_sin, libre_cos, <- dirección del hueco más ancho (escape)
-     contacto, atascado] <- banderas de resolución de problemas
+     contacto, atascado, <- banderas de resolución de problemas
+     libre_izq, libre_der, <- despeje lateral derecho e izquierdo
+     hueco_ancho,        <- ancho del hueco más ancho, en radianes/pi
+     hueco_dist,         <- despeje en el centro de ese hueco
+     goal_clear,         <- despeje en el rumbo al objetivo (±20°)
+     trasero,            <- despeje detrás del robot
+     vel_adelante,       <- velocidad real sobre el eje del chasis
+     ratio_libre]        <- fracción del abanico despejada
 - Obstáculos complejos: cajas de alturas variadas, cilindros (postes),
   rampas inclinadas y paredes en forma de "L" (callejones sin salida).
 - Fricción variable: zona de césped (mu=2.0) y zona de baldosa (mu=0.5).
@@ -114,7 +121,20 @@ MOVE_STREAK_BONUS = 2.0         # por cada segundo de movimiento continuo
 TRAP_PENALTY = -15.0            # atrapado: 3+ obstáculos a menos de 30 cm
 EXPLORATION_BONUS = 0.3         # shaping adicional por explorar
 OBSTACLE_AVOID_BONUS = 0.1      # shaping por mantener distancia
-CLOSE_OBSTACLE_PENALTY = -1.0   # shaping si un sensor está casi tocando
+
+# --- Presupuesto de recompensa ----------------------------------------- #
+# Todo lo que sigue está calibrado contra el avance, que rinde ~+4/s a tope
+# (0.0036 m por paso × 20 × 60 pasos/s). Antes el castigo por proximidad era
+# un escalón de -1.0 POR PASO = -60/s: catorce veces el premio por avanzar.
+# Con esa relación la política aprende exactamente una cosa: quedarse quieta
+# lejos de todo, que es el "frena en seco en mitad de la nada" reportado.
+# Ahora la proximidad es gradual y siempre menor que tocar:
+#   avanzar libre        +4/s
+#   acercarse a 0.8 m     0
+#   acercarse a 0.1 m    -7/s
+#   tocando             -15/s
+CLOSE_OBSTACLE_M = 0.80         # desde acá empieza a descontar
+CLOSE_OBSTACLE_PENALTY = -0.12  # por paso PEGADO (se escala por cercanía)
 
 # Umbrales de detección
 TRAP_RADIUS = 0.30              # metros
@@ -129,11 +149,19 @@ MOVE_EPS_M = 0.002              # desplazamiento mínimo por paso para "moverse"
 CONTACT_PENALTY = -0.25         # por paso en contacto con algo sólido
 ESCAPE_BONUS = 3.0              # por soltarse de un obstáculo retrocediendo
 CLEARANCE_REWARD = 2.0          # por ganar distancia libre cuando estaba pegado
-APPROACH_PENALTY = -0.30        # por acercarse a <0.40 m teniendo el frente libre
+APPROACH_PENALTY = -0.05        # por acercarse a <0.40 m teniendo el frente libre
 NEAR_OBSTACLE_M = 0.40          # "pegado": por debajo de esto hay que maniobrar
 FREE_RAY_M = 1.20               # rayo que cuenta como espacio libre transitable
 STUCK_SPEED = 0.03              # m/s por debajo de esto el robot está atascado
 STUCK_STEPS = 45                # 0.75 s sin moverse = bandera de atascado
+
+# --- Sentidos laterales y de rumbo (V6) -------------------------------- #
+# Los 36 rayos del abanico son simétricos alrededor del frente, pero la
+# política no tenía una lectura compacta de "por dónde me puedo escapar".
+# Estos umbrales definen los tres sectores que sí importan:
+SIDE_MIN_DEG = 35.0             # desde acá hacia el costado = sector lateral
+GOAL_CONE_DEG = 20.0            # cono alrededor del rumbo al objetivo
+REAR_DEG = 140.0                # a partir de acá = detrás del robot
 
 # Umbral de contacto real. PyBullet mantiene en getContactPoints los pares de
 # broadphase con normalForce=0 y sin penetración: contarlos como choque hacía
@@ -141,8 +169,10 @@ STUCK_STEPS = 45                # 0.75 s sin moverse = bandera de atascado
 COLLISION_MIN_FORCE = 0.02      # N de fuerza normal mínima para contar
 COLLISION_MIN_PENETRATION_M = 0.001  # 1 mm de penetración mínima
 
-# Observación extendida: 14 base + 36 LiDAR + 8 de resolución de problemas.
-OBS_EXTRAS = 8
+# Observación extendida: 14 base + 36 LiDAR + 16 de resolución de problemas.
+# Los primeros 8 extras son los del V5; los 8 nuevos van al final para no
+# mover ninguna columna existente.
+OBS_EXTRAS = 16
 OBS_DIM = 14 + SENSOR_COUNT + OBS_EXTRAS
 
 if SENSOR_COUNT != FAN_INNER_RAYS + 2 * FAN_OUTER_RAYS:  # falla ruidoso
@@ -322,7 +352,13 @@ class WallEEnvV3(WallEEnvV2):
         sensor_low = [0.0] * SENSOR_COUNT
         # 50..57: claridad frontal, distancia mínima, seno y coseno del rumbo
         # al obstáculo, seno y coseno del hueco libre, contacto y atascado.
-        extras_low = [0.0, 0.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0]
+        # 58..65: despeje lateral izquierdo y derecho, ancho del hueco, despeje
+        # en su centro, despeje hacia el objetivo, despeje detrás, velocidad
+        # de avance (único extra con signo) y fracción del abanico libre.
+        extras_low = [
+            0.0, 0.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0,
+        ]
 
         obs_low = np.array(
             base_low + sensor_low + extras_low, dtype=np.float32
@@ -774,8 +810,58 @@ class WallEEnvV3(WallEEnvV2):
         angle = ((start + mid) * step + math.pi) % (2.0 * math.pi) - math.pi
         return math.sin(angle), math.cos(angle)
 
+    def _widest_gap(self) -> tuple[float, float]:
+        """Hueco libre más ancho: (ancho en radianes, distancia en su centro).
+
+        `_free_direction` devuelve hacia dónde está el hueco; esto devuelve
+        además CUÁNTO mide. Un hueco de 20° no es una salida, uno de 120° sí,
+        y con solo la dirección la política no podía distinguirlos.
+        """
+        n = int(self.lidar_meters.size)
+        if n == 0:
+            return 0.0, float(self.lidar_max_dist)
+        free = self.lidar_meters > FREE_RAY_M
+        if not free.any():
+            return 0.0, float(self.lidar_meters.min())
+        if free.all():
+            return math.pi, float(self.lidar_max_dist)
+        start = int(np.argmin(free))
+        best_len = 0
+        best_start = 0
+        run_len = 0
+        run_start = 0
+        for k in range(n):
+            idx = (start + k) % n
+            if free[idx]:
+                if run_len == 0:
+                    run_start = k
+                run_len += 1
+                if run_len > best_len:
+                    best_len = run_len
+                    best_start = run_start
+            else:
+                run_len = 0
+        step = 2.0 * math.pi / n
+        mid = (start + best_start + (best_len - 1) * 0.5) % n
+        ancho = max(0, best_len - 1) * step
+        return ancho, float(self.lidar_meters[int(mid)])
+
+    def _fan_sector_min(self, lo_deg: float, hi_deg: float) -> float:
+        """Distancia mínima del abanico entre dos ángulos, en grados."""
+        lo = math.radians(min(lo_deg, hi_deg))
+        hi = math.radians(max(lo_deg, hi_deg))
+        mask = (self.fan_angles >= lo) & (self.fan_angles <= hi)
+        if not mask.any():
+            return float(self.lidar_max_dist)
+        return float(self.fan_meters[mask].min())
+
     def _problem_obs(self) -> np.ndarray:
-        """8 valores que describen el problema inmediato del robot."""
+        """16 valores que describen el problema inmediato del robot.
+
+        Los 8 primeros son los del V5 (compatibles con el modelo viejo);
+        los 8 nuevos describen los costados, el hueco, el rumbo al objetivo,
+        lo que hay detrás y la velocidad real de avance.
+        """
         meters = self.lidar_meters
         max_d = float(self.lidar_max_dist)
         # "Al frente" es el cono de decisión, no el semicírculo entero: con
@@ -788,8 +874,45 @@ class WallEEnvV3(WallEEnvV2):
         bearing = index * step
         bearing = (bearing + math.pi) % (2.0 * math.pi) - math.pi
         free_sin, free_cos = self._free_direction()
+
+        # --- costados: por dónde se puede escapar ------------------------
+        libre_izq = self._fan_sector_min(SIDE_MIN_DEG, 90.0)
+        libre_der = self._fan_sector_min(-90.0, -SIDE_MIN_DEG)
+
+        # --- hueco más ancho ---------------------------------------------
+        hueco_ancho, hueco_dist = self._widest_gap()
+
+        # --- rumbo al objetivo: qué hay justo en esa dirección -----------
+        pos, quat = p.getBasePositionAndOrientation(self.robot)
+        yaw = float(p.getEulerFromQuaternion(quat)[2])
+        goal_bearing = wrap_angle(float(self.goal_angle) - yaw)
+        goal_deg = math.degrees(goal_bearing)
+        goal_clear = self._fan_sector_min(
+            goal_deg - GOAL_CONE_DEG, goal_deg + GOAL_CONE_DEG
+        )
+
+        # --- detrás: el anillo sí llega, el abanico no -------------------
+        angulos = np.arange(meters.size) * step
+        angulos = (angulos + math.pi) % (2.0 * math.pi) - math.pi
+        detras_mask = np.abs(angulos) > math.radians(REAR_DEG)
+        trasero = (
+            float(meters[detras_mask].min()) if detras_mask.any() else max_d
+        )
+
+        # --- velocidad real en el eje del chasis ------------------------
+        lin_vel, _ = p.getBaseVelocity(self.robot)
+        vel_adelante = (
+            float(lin_vel[0]) * math.cos(yaw) + float(lin_vel[1]) * math.sin(yaw)
+        )
+        vel_max = self.max_wheel_speed * 0.09  # rueda de 9 cm
+        vel_norm = float(np.clip(vel_adelante / max(vel_max, 1e-6), -1.0, 1.0))
+
+        # --- proporción del abanico que está despejada ------------------
+        ratio_libre = float(np.mean(self.fan_meters > FREE_RAY_M))
+
         return np.array(
             [
+                # --- 8 del V5, mismo orden ------------------------------
                 float(np.clip(1.0 - front_min / max_d, 0.0, 1.0)),
                 float(np.clip(1.0 - nearest / max_d, 0.0, 1.0)),
                 math.sin(bearing),
@@ -798,6 +921,15 @@ class WallEEnvV3(WallEEnvV2):
                 free_cos,
                 1.0 if self._contact_flag else 0.0,
                 1.0 if self._stuck_steps >= STUCK_STEPS else 0.0,
+                # --- 8 nuevos -------------------------------------------
+                float(np.clip(1.0 - libre_izq / max_d, 0.0, 1.0)),
+                float(np.clip(1.0 - libre_der / max_d, 0.0, 1.0)),
+                float(np.clip(hueco_ancho / math.pi, 0.0, 1.0)),
+                float(np.clip(1.0 - hueco_dist / max_d, 0.0, 1.0)),
+                float(np.clip(1.0 - goal_clear / max_d, 0.0, 1.0)),
+                float(np.clip(1.0 - trasero / max_d, 0.0, 1.0)),
+                vel_norm,
+                ratio_libre,
             ],
             dtype=np.float32,
         )
@@ -1059,17 +1191,22 @@ class WallEEnvV3(WallEEnvV2):
                 info["trapped"] = True
                 info["trap_sectors"] = sectors
 
-        # ── 5) Shaping suave de proximidad con el cono frontal ──
-        # fan_norm: 0 = libre (sin obstáculo), 1 = obstáculo encima.
+        # ── 5) Shaping de proximidad, gradual ──
+        # Antes era un escalón: -1.0 por paso en cuanto un rayo del cono veía
+        # algo a menos de 0.9 m, contra +0.07 por avanzar. La política
+        # aprendía a no acercarse a nada. Ahora descuenta proporcional a lo
+        # cerca que está, con techo en CLOSE_OBSTACLE_PENALTY.
         sensor_slice = obs[14 : 14 + SENSOR_COUNT]
         if self._enable_sensors:
             front_norms = sensor_slice[self._fan_front_mask]
             max_sensor = float(np.max(front_norms)) if front_norms.size else 0.0
+            front_now = self.front_clearance(FRONT_CONE_DEG)
         else:
             max_sensor = 0.0
-        if max_sensor > 0.85:
-            # Algún rayo del cono frontal detecta algo a menos de ~0.9 m.
-            reward += CLOSE_OBSTACLE_PENALTY
+            front_now = float(self.lidar_max_dist)
+        if front_now < CLOSE_OBSTACLE_M:
+            closeness = 1.0 - front_now / CLOSE_OBSTACLE_M
+            reward += CLOSE_OBSTACLE_PENALTY * closeness
         elif max_sensor < 0.50:
             # Todo el frente está despejado a más de 3 m.
             reward += OBSTACLE_AVOID_BONUS

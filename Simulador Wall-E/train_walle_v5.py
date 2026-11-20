@@ -1,21 +1,23 @@
 """
-train_walle_v5.py · Entrenamiento del Explorador Autónomo V5 (obs 58D)
+train_walle_v5.py · Entrenamiento del Explorador Autónomo (obs 66D)
 
 Cambios respecto a V4 (prioridad: resolución de problemas):
 
 1. Chocar ya NO termina el episodio. El robot aprende a retroceder, girar
    hacia el hueco libre y seguir explorando en vez de morir en el impacto.
-2. La observación añade 8 valores de contexto:
-      claridad frontal, distancia mínima, rumbo del obstáculo más cercano,
-      dirección del hueco más ancho, contacto y atascado.
-3. El LiDAR escanea a ras de suelo desde el centro del robot: ve lo que está
-   a punto de tocar (antes el origen quedaba dentro del obstáculo al chocar).
-4. Recompensas nuevas: castigo por paso en contacto, bonus por soltarse,
-   bonus por ganar holgura y castigo por acercarse aún más estando pegado.
+2. La observación añade 16 valores de contexto: los 8 del V5 (claridad
+   frontal, distancia mínima, rumbo del obstáculo más cercano, dirección del
+   hueco más ancho, contacto y atascado) más 8 del V6 (despeje de cada
+   costado, ancho del hueco, despeje en su centro, despeje hacia el objetivo,
+   despeje detrás, velocidad real de avance y fracción del abanico libre).
+3. El LiDAR escanea a ras de suelo (6 cm sobre el suelo local), mide desde el
+   paragolpes y reparte los 36 rayos densos al frente.
+4. Recompensas calibradas contra el avance: la proximidad descuenta de forma
+   gradual y siempre menos que tocar.
 
 Uso:
     python train_walle_v5.py --timesteps 2000000 --output_dir ./models
-    python train_walle_v5.py --resume ./models/checkpoints/walle_v5_500000_steps.zip
+    python train_walle_v5.py --resume ./models/checkpoints/walle_v6_500000_steps.zip
 """
 
 from __future__ import annotations
@@ -27,15 +29,25 @@ import time
 import torch
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import (
+    DummyVecEnv,
+    SubprocVecEnv,
+    VecNormalize,
+)
 
 from walle_env_v3 import OBS_DIM, WallEEnvV3
 
-MODEL_NAME = "walle_ppo_model_v5_recovery.zip"
+MODEL_NAME = "walle_ppo_model_v6.zip"
 
 
 def make_env(seed: int, stage: int = 3, obstacle_count: int = 8):
-    """Factory para crear entornos V5 con semilla determinada."""
+    """Factory para crear entornos V5 con semilla determinada.
+
+    Se envuelve en `Monitor` para que SB3 reciba `info["episode"]` al terminar
+    cada episodio: sin eso no hay `rollout/ep_rew_mean` y no hay forma de saber
+    si el entrenamiento está mejorando o solo gastando CPU.
+    """
 
     def _init():
         env = WallEEnvV3(
@@ -55,7 +67,7 @@ def make_env(seed: int, stage: int = 3, obstacle_count: int = 8):
             collision_terminates=False,
         )
         env.reset(seed=seed)
-        return env
+        return Monitor(env)
 
     return _init
 
@@ -73,7 +85,7 @@ def main() -> None:
     print(f"[TRAIN_V5] Hilos de torch: {torch.get_num_threads()} de {_logical} lógicos")
 
     parser = argparse.ArgumentParser(
-        description="Entrenar modelo V5 (LiDAR a ras de suelo, obs 58D)"
+        description="Entrenar modelo (LiDAR a ras de suelo, obs 66D)"
     )
     parser.add_argument(
         "--resume",
@@ -142,6 +154,18 @@ def main() -> None:
         print(f"[TRAIN_V5] Vectorización: DummyVecEnv x{n_envs} (en proceso)")
         env = DummyVecEnv(env_fns)
 
+    # Normalizar SOLO la recompensa, nunca la observación.
+    #
+    # Las recompensas por paso son del orden de ±0.2 y los episodios duran
+    # 1200 pasos: el retorno llega a ±200 y la cabeza de valor no lo sigue
+    # (value_loss oscilaba entre 5 y 130 en las pruebas). Con norm_reward el
+    # retorno queda en el rango donde el LSTM aprende.
+    #
+    # norm_obs=False a propósito: la observación ya está acotada y normalizada
+    # a mano, y así el modelo guardado se usa en la GUI con la observación
+    # cruda, sin arrastrar estadísticas de normalización.
+    env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)
+
     if args.resume and os.path.exists(args.resume):
         print(f"[TRAIN_V5] Cargando modelo existente: {args.resume}")
         model = RecurrentPPO.load(args.resume, env)
@@ -178,7 +202,7 @@ def main() -> None:
         # trabajo perdido como mucho.
         save_freq=max(1, 10000 // max(1, env.num_envs)),
         save_path=checkpoint_dir,
-        name_prefix="walle_v5",
+        name_prefix="walle_v6",
         save_replay_buffer=False,
         save_vecnormalize=False,
     )

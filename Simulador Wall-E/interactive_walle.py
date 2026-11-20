@@ -103,6 +103,14 @@ LIDAR_FAN_ARC_DEG = 180.0        # abanico frontal (WALL-E mira al frente)
 LIDAR_FAN_LINE_WIDTH = 1.0       # grosor de cada rayo en la ventana
 LIDAR_FAN_COLOR = [0.30, 0.55, 0.82]   # azul acero suave, no electrico
 LIDAR_FAN_UPDATE_TICKS = 3       # 20 Hz a 60 FPS: abanico fluido y barato
+
+# --- Cono de decision (los 36 rayos densos) ---------------------------- #
+# El anillo de 72 se pinta azul y da la vuelta completa; el abanico de 36 es
+# el que de verdad usa la politica para decidir y va denso al frente. Si se
+# pintan igual no se distingue cual manda. Ambar calido, mas grueso, encima.
+LIDAR_CONE_COLOR = [0.98, 0.64, 0.18]  # ambar calido: "esto es lo que ve"
+LIDAR_CONE_LINE_WIDTH = 1.6
+LIDAR_CONE_HIDE_M = 0.98         # rayos casi sin impacto no se dibujan
 # El abanico se dibuja a ras de suelo (a los pies de WALL-E): asi se ve
 # exactamente donde esta chocando y que hueco tiene para escapar.
 LIDAR_FAN_HEIGHT = 0.03
@@ -1101,7 +1109,12 @@ class WalleController:
     # Cerebro PPO
     # ------------------------------------------------------------------ #
     def load_brain(self) -> tuple[bool, str]:
-        """Carga la política PPO/RecurrentPPO. Acepta 13D (V1) o 58D (V5)."""
+        """Carga la política PPO/RecurrentPPO que corresponda al entorno.
+
+        La dimensión de observación no está hardcodeada: se compara contra
+        `self.env.observation_space.shape`. Así el día que el entorno gane
+        sentidos nuevos el cargador no hay que tocarlo.
+        """
         if self.model is not None:
             return True, f"Cerebro PPO listo: {self.model_path.name}."
         if not self.model_path.exists():
@@ -1132,11 +1145,13 @@ class WalleController:
             )
             return False, self._brain_error
 
-        obs_shape = getattr(model.observation_space, "shape", None)
-        if obs_shape not in ((13,), (19,), (50,), (58,)):
+        obs_shape = tuple(getattr(model.observation_space, "shape", ()) or ())
+        env_shape = tuple(self.env.observation_space.shape)
+        if obs_shape != env_shape:
             self._brain_error = (
                 f"El modelo {self.model_path.name} espera observación "
-                f"{obs_shape}, pero el entorno actual usa {self.env.observation_space.shape}."
+                f"{obs_shape}, pero el entorno actual usa {env_shape}. "
+                "Hay que reentrenar: la observación cambió de tamaño."
             )
             return False, self._brain_error
 
@@ -1167,6 +1182,41 @@ class WalleController:
         self._lstm_states = None
         self._episode_start = np.ones((1,), dtype=bool)
 
+    def _candidatos_modelo(self) -> list[Path]:
+        """Modelos entrenados, en orden de preferencia.
+
+        Primero los checkpoints más recientes (entrenamiento en curso), después
+        los modelos finales por versión. No se filtra por dimensión acá: eso lo
+        decide `load_brain` comparando contra el entorno, que es la única
+        fuente de verdad.
+        """
+        models_dir = Path(SCRIPT_DIR) / "models"
+        candidatos: list[Path] = []
+        ckpt_dir = models_dir / "checkpoints"
+        if ckpt_dir.exists():
+            candidatos.extend(
+                sorted(
+                    ckpt_dir.glob("*.zip"),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+            )
+        for nombre in (
+            "walle_ppo_model_v6.zip",
+            "walle_ppo_model_v5_recovery.zip",
+            "walle_ppo_model_v4_lidar.zip",
+        ):
+            candidatos.append(models_dir / nombre)
+        candidatos.append(PPO_MODEL)
+        vistos: set[Path] = set()
+        unicos: list[Path] = []
+        for candidato in candidatos:
+            if candidato in vistos or not candidato.exists():
+                continue
+            vistos.add(candidato)
+            unicos.append(candidato)
+        return unicos
+
     def set_control_mode(self, mode: str) -> list[str]:
         """Cambia entre control manual (PID) y cerebro PPO."""
         mode = normalize_text(mode)
@@ -1176,46 +1226,39 @@ class WalleController:
         message = ""
         partial_note = ""
         if mode == "ppo":
-            # Seleccionar el modelo correcto según el entorno (V5=58D, V4=50D,
-            # V1=13D). Se prefiere el modelo V5 de resolución de problemas.
+            # Seleccionar el modelo que encaje con la observación del entorno.
+            # No hay lista de dimensiones hardcodeada: se prueban los modelos
+            # candidatos (checkpoints recientes primero) y gana el primero que
+            # cargue con la forma correcta.
             if hasattr(self.env, "lidar_meters"):
-                models_dir = Path(SCRIPT_DIR) / "models"
-                v5_model = models_dir / "walle_ppo_model_v5_recovery.zip"
-                v4_model = models_dir / "walle_ppo_model_v4_lidar.zip"
-                expected = int(self.env.observation_space.shape[0])
-                chosen = None
-                if v5_model.exists() and expected == 58:
-                    chosen = v5_model
-                elif v4_model.exists() and expected == 50:
-                    chosen = v4_model
-                if chosen is not None:
-                    self.model_path = chosen
-                    self.model = None  # forzar recarga del nuevo modelo
-                else:
-                    # Entrenamiento en curso: usar el checkpoint más reciente.
-                    ckpt_dir = models_dir / "checkpoints"
-                    checkpoints = (
-                        sorted(
-                            ckpt_dir.glob("walle_v5_*_steps.zip"),
-                            key=lambda path: path.stat().st_mtime,
-                            reverse=True,
-                        )
-                        if ckpt_dir.exists()
-                        else []
+                candidatos = self._candidatos_modelo()
+                if not candidatos:
+                    return [
+                        "No hay ningún modelo entrenado en models\\ todavía.",
+                        "Lanza train_walle_v5.py o sigo en modo manual (PID).",
+                    ]
+                elegido = None
+                ultimo_error = ""
+                for candidato in candidatos:
+                    self.model_path = candidato
+                    self.model = None
+                    ok, message = self.load_brain()
+                    if ok:
+                        elegido = candidato
+                        break
+                    ultimo_error = message
+                if elegido is None:
+                    return [
+                        f"Ningún modelo encaja con la observación "
+                        f"{tuple(self.env.observation_space.shape)}.",
+                        ultimo_error,
+                        "Sigo en modo manual (PID).",
+                    ]
+                if "checkpoints" in elegido.parts:
+                    partial_note = (
+                        "Modelo parcial cargado (entrenamiento en curso): "
+                        f"{elegido.name}."
                     )
-                    if checkpoints:
-                        self.model_path = checkpoints[0]
-                        self.model = None
-                        partial_note = (
-                            "Modelo V5 parcial cargado (entrenamiento en "
-                            f"curso): {checkpoints[0].name}."
-                        )
-                    else:
-                        return [
-                            "El modelo V5 (walle_ppo_model_v5_recovery.zip) "
-                            "todavía no existe y el entorno ahora usa 58D.",
-                            "Lanza train_walle_v5.py o sigo en modo manual (PID).",
-                        ]
             else:
                 # Entorno V1: usar el modelo físico de 13D
                 v1_model = PPO_MODEL
@@ -3237,12 +3280,15 @@ class WalleHud:
         # con replaceItemUniqueId, sin recrear geometria).
         self._fan_lines: list[int] = []
         self._fan_key: tuple[float, float, float] | None = None
+        # Cono denso de 36 rayos: los que alimentan la politica.
+        self._cone_lines: list[int] = []
+        self._cone_key: tuple[float, float, float] | None = None
         self._contact_lines: list[int] = []
         self._chunk_draw_counter = 0
 
     def _remove_lidar_fan(self) -> None:
         """Apaga los rayos del abanico (quedan ocultos, sin recrear nada)."""
-        for item in self._fan_lines:
+        for item in list(self._fan_lines) + list(self._cone_lines):
             try:
                 p.addUserDebugLine(
                     [0.0, 0.0, -50.0],
@@ -3255,6 +3301,7 @@ class WalleHud:
             except Exception:
                 pass
         self._fan_key = None
+        self._cone_key = None
 
     def _update_lidar_fan(self, pos, yaw) -> None:
         """Abanico LiDAR: rayos finos y densos hasta el punto de impacto real.
@@ -3355,6 +3402,83 @@ class WalleHud:
                 except Exception:
                     pass
 
+    def _update_lidar_cone(self, pos, yaw) -> None:
+        """Pinta los 36 rayos del cono de decision, en ambar.
+
+        El anillo de 72 se dibuja azul y gira completo; estos 36 son los que
+        entran en la observacion de la politica y los que usan el frenado y la
+        esquiva. Se pintan encima, mas gruesos y en otro color, para que se vea
+        de un vistazo que sector esta mandando en la decision.
+
+        Cada rayo arranca en el PARAGOLPES, no en el centro: las distancias de
+        `fan_meters` ya vienen descontado el semieje del chasis, asi que el
+        segmento dibujado coincide con la distancia que reporta el sensor.
+        """
+        angles = getattr(self.env, "fan_angles", None)
+        meters = getattr(self.env, "fan_meters", None)
+        if angles is None or meters is None or len(angles) == 0:
+            return
+        max_dist = float(getattr(self.env, "lidar_max_dist", 6.0))
+        sensor_z = float(pos[2]) - HOME_BASE_Z + LIDAR_FAN_HEIGHT + 0.004
+        bx = float(pos[0])
+        by = float(pos[1])
+        key = (round(bx, 2), round(by, 2), round(yaw, 2))
+        if key == self._cone_key and self._cone_lines:
+            return
+        self._cone_key = key
+
+        radius_fn = getattr(self.env, "_body_radius", None)
+        hidden = [bx, by, -50.0]
+        color = LIDAR_CONE_COLOR
+        for index in range(len(angles)):
+            rel = float(angles[index])
+            dist = float(meters[index])
+            ang = yaw + rel
+            if dist >= max_dist * LIDAR_CONE_HIDE_M:
+                start = end = hidden
+            else:
+                # Arranca en el borde del chasis en esa direccion.
+                if callable(radius_fn):
+                    try:
+                        radius = float(radius_fn(rel))
+                    except Exception:
+                        radius = 0.0
+                else:
+                    radius = 0.0
+                d = max(0.02, min(dist, max_dist))
+                cos_a = math.cos(ang)
+                sin_a = math.sin(ang)
+                start = [bx + cos_a * radius, by + sin_a * radius, sensor_z]
+                end = [
+                    bx + cos_a * (radius + d),
+                    by + sin_a * (radius + d),
+                    sensor_z,
+                ]
+            if index < len(self._cone_lines):
+                try:
+                    p.addUserDebugLine(
+                        start,
+                        end,
+                        color,
+                        lineWidth=LIDAR_CONE_LINE_WIDTH,
+                        lifeTime=0.0,
+                        replaceItemUniqueId=self._cone_lines[index],
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    item = p.addUserDebugLine(
+                        start,
+                        end,
+                        color,
+                        lineWidth=LIDAR_CONE_LINE_WIDTH,
+                        lifeTime=0.0,
+                    )
+                    self._cone_lines.append(item)
+                except Exception:
+                    pass
+
     def _update_contact_markers(self, pos) -> None:
         """Marca en naranja el punto exacto donde WALL-E está chocando.
 
@@ -3413,17 +3537,19 @@ class WalleHud:
             pos, quat = p.getBasePositionAndOrientation(self.env.robot)
             _roll, _pitch, yaw = p.getEulerFromQuaternion(quat)
             self._update_lidar_fan(pos, yaw)
+            self._update_lidar_cone(pos, yaw)
             self._update_contact_markers(pos)
         except Exception:
             pass
 
     def clear(self) -> None:
-        for item in self._ids:
+        for item in list(self._ids) + list(self._contact_lines):
             try:
                 p.removeUserDebugItem(item)
             except Exception:
                 pass
         self._ids = []
+        self._contact_lines = []
 
     def update(self) -> None:
         self.clear()
@@ -3667,6 +3793,22 @@ class InteractiveWalleApp:
             anchor="w",
         )
         self.subtitle.grid(row=1, column=0, sticky="w", pady=(0, 0))
+
+        # Panel de sentidos: lo que WALL-E está percibiendo AHORA, en números
+        # legibles. Sin esto hay que abrir el código para saber por qué frenó.
+        self.senses_var = tk.StringVar(value="Sentidos: esperando escaneo…")
+        self.senses_label = tk.Label(
+            header,
+            textvariable=self.senses_var,
+            bg=UI_BG,
+            fg="#c8b48a",
+            font=(UI_FONT, 8),
+            anchor="w",
+            justify="left",
+        )
+        self.senses_label.grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
+        )
 
         badge = tk.Label(
             header,
@@ -4170,6 +4312,7 @@ class InteractiveWalleApp:
             self._sim_elapsed_total = 0.0
         if self._ticks % 6 == 0:
             self._refresh_status()
+            self._refresh_senses()
             self._update_feedback_buttons()
             self._refresh_mode_ui()
         self._schedule_tick()
@@ -4184,6 +4327,52 @@ class InteractiveWalleApp:
         if force or text != self._last_status:
             self._last_status = text
             self.status_var.set(text)
+
+    def _refresh_senses(self) -> None:
+        """Traduce la observación del robot a una línea que se pueda leer.
+
+        La política ve 66 números; acá se muestran los que explican una
+        decisión: qué tan lejos está el frente, qué hay a cada costado, dónde
+        está el hueco más ancho, qué hay en el rumbo al objetivo, qué hay
+        detrás y a qué velocidad va de verdad.
+        """
+        env = getattr(self.controller, "env", None)
+        if env is None or not hasattr(env, "fan_meters"):
+            self.senses_var.set("Sentidos: entorno sin LiDAR (V1)")
+            return
+        try:
+            fan = env.fan_meters
+            if fan is None or len(fan) == 0:
+                return
+            max_d = float(getattr(env, "lidar_max_dist", 6.0))
+            frente = float(env.front_clearance(35.0))
+            izq = float(env._fan_sector_min(35.0, 90.0))
+            der = float(env._fan_sector_min(-90.0, -35.0))
+            ancho_rad, hueco_m = env._widest_gap()
+            ancho_deg = math.degrees(ancho_rad)
+            pos, quat = p.getBasePositionAndOrientation(env.robot)
+            yaw = float(p.getEulerFromQuaternion(quat)[2])
+            desde_objetivo = math.degrees(
+                (float(env.goal_angle) - yaw + math.pi) % (2.0 * math.pi) - math.pi
+            )
+            # Despeje en el rumbo al objetivo (±20°), relativo al frente.
+            goal_clear = env._fan_sector_min(
+                desde_objetivo - 20.0, desde_objetivo + 20.0
+            )
+            lin_vel, _ = p.getBaseVelocity(env.robot)
+            vel = float(lin_vel[0]) * math.cos(yaw) + float(lin_vel[1]) * math.sin(yaw)
+            libre_pct = 100.0 * float(np.mean(fan > 1.20))
+            contacto = " CONTACTO" if getattr(env, "_contact_flag", False) else ""
+            self.senses_var.set(
+                f"Sentidos · frente {frente:4.2f} m · "
+                f"izq {izq:4.2f} · der {der:4.2f} m · "
+                f"hueco {ancho_deg:3.0f}° a {hueco_m:4.2f} m · "
+                f"objetivo {desde_objetivo:+4.0f}°/{goal_clear:4.2f} m · "
+                f"vel {vel:+.2f} m/s · libre {libre_pct:3.0f}%"
+                f"{contacto}"
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # Ciclo de vida

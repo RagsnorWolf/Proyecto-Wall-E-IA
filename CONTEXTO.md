@@ -100,7 +100,7 @@ WALL-E Simulador Robot.bat    abre la GUI
 WALL-E Entrenar Cerebro.bat   entrena el PPO
 WALL-E Robot Real.bat         manda las órdenes al ESP32 por WiFi
 interactive_walle.py          GUI, chat y controlador
-walle_env_v3.py               entorno V5, observación de 58 números
+walle_env_v3.py               entorno V6, observación de 66 números
 train_walle_v5.py             entrenamiento
 transplant_v4_to_v5.py        trasplante de pesos V4 → V5
 models\                       las políticas entrenadas
@@ -191,7 +191,7 @@ checkpoint intermedio no: es basura regenerable.
 ```
 tipo(carpeta): qué cambió
 
-feat(simulador): recompensa de holgura en el entorno V5
+feat(simulador): recompensa de holgura en el entorno V6
 fix(cerebro): timeout del ACK del UNO
 docs(agente): puesta en marcha con Ollama
 ```
@@ -227,18 +227,26 @@ docs(agente): puesta en marcha con Ollama
 | Hecho | Verificación |
 |---|---|
 | Modo manual | avanzó 0,95 m de 1,00 · giró 43° de 45° |
-| Modo PPO | carga `RecurrentPPO (LSTM)`, obs 58D, decide y mueve |
-| Entrenamiento | 4096 pasos, 104 fps, modelo guardado |
+| Modo PPO | carga `RecurrentPPO (LSTM)`, obs 66D, decide y mueve |
+| Entrenamiento | 1,2 M pasos, ~100 fps, modelo en `models\walle_ppo_model_v6.zip` |
 | GUI | 59 FPS, textura aplicada, sin ejes ni panel gris |
 | Trasplante V4 → V5 | 0,000000 de diferencia en 60 pasos |
+| Sensor LiDAR | error < 1 mm desde el paragolpes en 5 posiciones |
+| Objetos bajos | cajas de 8, 12, 20 y 40 cm, las cuatro visibles |
+| Sentidos nuevos | 8 columnas: costados, hueco, objetivo, detrás, velocidad |
 
 ### Bugs reales encontrados y corregidos
 
 | Bug | Consecuencia | Estado |
 |---|---|---|
 | `p.rayTestBatch` con `parentObjectUniqueId` | Anula el lote entero en PyBullet 3.2.7: todo vuelve "libre a 6 m" y el robot se come la pared | Corregido: el robot se saca del broadphase durante el barrido |
+| Plano de escaneo a 0,21 m del piso | Una caja de 12 cm pasaba por debajo del sensor aunque el robot chocara con ella | Corregido: escanea a 6 cm sobre el suelo local |
+| Distancias medidas desde el centro | Todos los umbrales quedaban 17,5 cm corridos y el robot frenaba lejos de todo | Corregido: se mide desde el paragolpes, 0 = tocando |
+| Castigo por proximidad de −1,0 por paso | Quince veces el premio por avanzar: la política aprendía a quedarse quieta lejos de todo | Corregido: descuento gradual con techo menor que tocar |
 | `LIDAR_THREADS > 0` | Access violation en procesos hijos | `LIDAR_THREADS = 0` |
 | `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()` | Se entrena con `DummyVecEnv` |
+| Dos procesos PyBullet a la vez | El entrenamiento muere con `0xC0000005` sin traceback | Un solo proceso: ni GUI ni diagnósticos mientras entrena |
+| Faltaba `Monitor` en la factory | Sin `ep_rew_mean` no se sabía si el entrenamiento mejoraba | `return Monitor(env)` |
 | Faltaba `sb3-contrib` en `requirements.txt` | Una instalación limpia no podía cargar el modo PPO | Corregido |
 | `--direct` creaba siempre el entorno V1 (13D) | El PPO de 58D nunca cargaba y caía a manual en silencio | Corregido: respeta `--env v3` |
 | `WALL-E Asistente IA.bat` con `E:\` clavado | El lanzador solo funcionaba en esta máquina | Corregido: `%~dp0` |

@@ -104,8 +104,13 @@ def chequear_obs() -> int:
 
     # Solo aritmetica sobre nombres conocidos: nada de exec arbitrario.
     valor = eval(str(expr), {"__builtins__": {}}, dict(constantes))  # noqa: S307
-    if valor != 58:
-        print(f"OBS_DIM deberia ser 58, evalua a {valor}")
+    # La referencia se recalcula, no se escribe a mano: si el entorno gana
+    # sentidos, este chequeo no tiene que cambiar.
+    referencia = 14 + int(constantes["SENSOR_COUNT"]) + int(
+        constantes["OBS_EXTRAS"]
+    )
+    if valor != referencia:
+        print(f"OBS_DIM deberia ser {referencia}, evalua a {valor}")
         return 1
 
     print(f"OBS_DIM = {valor} OK")

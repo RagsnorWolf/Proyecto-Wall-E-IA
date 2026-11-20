@@ -94,7 +94,7 @@ Simulador Wall-E\
   WALL-E Entrenar Cerebro.bat   entrena el PPO
   WALL-E Robot Real.bat         manda las órdenes al ESP32 por WiFi
   interactive_walle.py          la GUI, el chat, el controlador
-  walle_env_v3.py               el entorno V5: observación de 58 números
+  walle_env_v3.py               el entorno V6: observación de 66 números
   train_walle_v5.py             el entrenamiento
   transplant_v4_to_v5.py        trasplante de pesos V4 → V5
   models\                       las políticas entrenadas (.zip)
@@ -212,7 +212,7 @@ checkpoint intermedio no: es basura regenerable.
 Formato: `tipo(carpeta): qué cambió`
 
 ```
-feat(simulador): recompensa de holgura en el entorno V5
+feat(simulador): recompensa de holgura en el entorno V6
 fix(cerebro): timeout del ACK del UNO
 docs(agente): puesta en marcha con Ollama
 ```
@@ -286,15 +286,31 @@ ESP32 → UNO (GPIO17 → D12) va directo.
 ### 6.2 El entorno del simulador (V5)
 
 ```
-Observación: 58 números
+Observación: 66 números
   ├── 14  base (posición, orientación, velocidad, contacto)  ← V2 original
   ├── 36  abanico LiDAR frontal de 36 rayos                  ← V4
-  └──  8  resolución de atascos                              ← V5
+  ├──  8  resolución de atascos                              ← V5
+  └──  8  sentidos nuevos                                    ← V6
+          ├── despeje del costado izquierdo
+          ├── despeje del costado derecho
+          ├── ancho del hueco más ancho (radianes/π)
+          ├── despeje en el centro de ese hueco
+          ├── despeje en el rumbo al objetivo (±20°)
+          ├── despeje detrás del robot
+          ├── velocidad real sobre el eje del chasis
+          └── fracción del abanico que está despejada
 Acción: 2 continuas (oruga izquierda, oruga derecha)
 ```
 
-Los primeros 50 números son exactamente los del V4, en el mismo orden. Por eso el
-trasplante de pesos funciona sin reentrenar de cero.
+Los primeros 58 números son exactamente los del V5, en el mismo orden. Las ocho
+columnas nuevas van al final, así que nada de lo que ya funcionaba se movió.
+
+**Por qué hacían falta los ocho nuevos:** con la observación vieja la política
+sabía *dónde* estaba el obstáculo más cercano y *hacia dónde* estaba el hueco,
+pero no **cuánto medía el hueco** ni **qué había a los costados**. Un pasillo de
+40 cm y una puerta de 2 m se veían igual: dos rayos libres. Ahora el ancho del
+hueco en radianes, el despeje de cada costado y la fracción del abanico libre
+distinguen "paso" de "no paso".
 
 **Cómo mira el LiDAR (corregido en esta tanda):**
 
@@ -322,18 +338,29 @@ decisión con muy poca resolución: la diferencia entre una caja centrada y una
 esquina entraba en el mismo rayo. El reparto denso-al-frente arregla eso sin
 gastar dimensiones de observación.
 
-**Recompensas V5:**
+**Recompensas V6 (calibradas contra el avance):**
 
 ```
-CONTACT_PENALTY    −0.25    tocó algo
-ESCAPE_BONUS       +3.00    salió de un atasco
-CLEARANCE_REWARD   +2.00    avanza con espacio libre
-APPROACH_PENALTY   −0.30    se acerca demasiado a un obstáculo
-NEAR_OBSTACLE_M     0.40    umbral de "demasiado cerca"
-FREE_RAY_M          1.20    rayo que cuenta como libre
-STUCK_SPEED         0.03    por debajo de esto, está trabado
-STUCK_STEPS         45      pasos trabado antes de considerarlo atasco
+Avance libre          +4/s    (0.0036 m/paso × 20 × 60 pasos/s)
+CONTACT_PENALTY      −0.25    por paso tocando algo
+ESCAPE_BONUS         +3.00    por soltarse retrocediendo
+CLEARANCE_REWARD     +2.00    por ganar distancia libre estando pegado
+CLOSE_OBSTACLE_M      0.80    desde acá empieza a descontar
+CLOSE_OBSTACLE_PENALTY −0.12  por paso pegado, escalado por cercanía
+APPROACH_PENALTY     −0.05    por acercarse teniendo el frente libre
+NEAR_OBSTACLE_M       0.40    umbral de "pegado"
+FREE_RAY_M            1.20    rayo que cuenta como libre
+STUCK_SPEED           0.03    por debajo de esto, está trabado
+STUCK_STEPS           45      pasos trabado antes de considerarlo atasco
 ```
+
+La relación importa más que los números sueltos. Antes el castigo por
+proximidad era un escalón de **−1.0 por paso = −60/s**, contra **+4/s** por
+avanzar: quince veces más caro acercarse que el premio por moverse. La política
+aprendía exactamente una cosa — quedarse quieta lejos de todo — y eso es el
+"frena en seco en mitad de la nada" que se reportó. Ahora la proximidad
+descuenta de forma gradual y su techo (−7/s a 0.1 m) sigue siendo menor que
+tocar (−15/s).
 
 Chocar **no** termina el episodio (`collision_terminates = False`). El robot
 aprende a recuperarse en vez de aprender a evitar el episodio.
@@ -350,6 +377,9 @@ Estas están resueltas. Si alguien las vuelve a tocar, se rompe.
 | Plano de escaneo a altura fija sobre la base | `pos[2] + 0.06` = 0.21 m del piso: una caja de 12 cm, una rampa baja o el borde de un escalón pasan por debajo del sensor | `pos[2] - BASE_Z + SENSOR_FOOT_Z` (altura sobre el suelo local) |
 | Distancia medida desde el centro del robot | Todos los umbrales (`NEAR_OBSTACLE_M`, `SAFE_GO_M`, `SAFE_SLOW_M`) quedaban 17,5 cm corridos y el robot frenaba lejos de todo | Restar `_body_radius(theta)` en cada rayo: 0 = tocando |
 | `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()` | Usar `DummyVecEnv` |
+| Dos procesos PyBullet en paralelo | El entrenamiento muere con `0xC0000005` sin traceback (el log se corta limpio). Pasó a los 6144 pasos con un `probe` corriendo al lado | Un solo proceso PyBullet a la vez: no lanzar diagnóstico ni GUI mientras entrena |
+| `Monitor` ausente en el `env_fns` | SB3 nunca recibe `info["episode"]`: no hay `rollout/ep_rew_mean` y no se puede saber si mejora | `return Monitor(env)` en la factory |
+| Recompensa sin normalizar | Retorno ±200 contra una cabeza de valor que no lo sigue (`value_loss` entre 5 y 130, oscilando) | `VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)` |
 | `rich` con stdout redirigido | Se bloquea | `progress_bar=False` |
 | `torch.set_num_threads` alto en inferencia | 1,5 s por paso | 1 hilo en inferencia, núcleos−2 en entrenamiento |
 | `COV_ENABLE_RGB_AXES` en PyBullet 3.2.7 | No existe, tira excepción | `getattr(p, "COV_ENABLE_RGB_AXES", None)` |
@@ -367,11 +397,24 @@ Estas están resueltas. Si alguien las vuelve a tocar, se rompe.
                                    las cuatro se ven; antes solo la de 40
 3. Reparto del abanico             36 rayos, 3.48° al frente, 8.4° al costado
 4. El anillo sigue completo        (72,) y coincide con el centro del abanico
-5. Observación                     (58,) y el espacio de Gymnasium igual
+5. Observación                     (66,) y el espacio de Gymnasium igual
 ```
 
 `test_v4_smoke.py` lo repite como aserción: si alguien vuelve a romper el barrido,
 falla con el número exacto en vez de entrenar un robot ciego durante horas.
+
+**Lo que se ve en pantalla.** La GUI pinta dos capas de rayos y un panel de
+sentidos, para no tener que abrir el código cuando el robot hace algo raro:
+
+```
+Anillo 72     azul acero, arco frontal completo   cobertura de 360°
+Cono 36       ámbar, más grueso, encima            los que deciden
+Panel         frente · izq · der · hueco · objetivo · vel · libre%
+```
+
+El panel se lee como una frase: *frente 0.42 m · izq 2.10 · der 2.08 m ·
+hueco 148° a 3.40 m · objetivo +12°/1.90 m · vel +0.84 m/s · libre 61%*. Si el
+robot frena sin motivo aparente, ese renglón dice por qué.
 
 ---
 
@@ -385,7 +428,7 @@ falla con el número exacto en vez de entrenar un robot ciego durante horas.
 | Consola de control | ✅ | 97 órdenes, 97 ACK, 0 reintentos, 0 timeouts |
 | Cadena simulador → UDP → puente | ✅ | 0 errores, parada limpia al cerrar |
 | Modo manual del simulador | ✅ | Avanzó 0,95 m de 1,00 · giró 43° de 45° |
-| Modo PPO del simulador | ✅ carga y decide | `RecurrentPPO (LSTM)`, obs 58D, política cargada |
+| Modo PPO del simulador | ✅ carga y decide | `RecurrentPPO (LSTM)`, obs 66D, política cargada |
 | Entrenamiento | ✅ | 4096 pasos, 104 fps, modelo guardado |
 | GUI | ✅ | 59 FPS estables, textura aplicada, sin ejes |
 

@@ -1,9 +1,10 @@
-"""Smoke test V5: obs 58D, LiDAR a ras de suelo, abanico de 36 y recompensas.
+"""Smoke test V6: obs 66D, LiDAR a ras de suelo, abanico de 36 y sentidos.
 
 Comprueba lo que rompía el sensor:
   - el anillo de 72 y el abanico de 36 se llenan de verdad (no todo 6.0 m)
   - las distancias vienen del paragolpes: 0 = tocando
   - un obstáculo bajo (12 cm) entra en la lectura
+  - los 16 extras describen el problema: costados, hueco, objetivo, detrás
   - contacto y recompensa son finitos y coherentes
 """
 
@@ -102,6 +103,51 @@ def main() -> None:
         f"cero fantasma: abanico mínimo {float(env.fan_meters.min()):.3f} m "
         "en una arena vacía"
     )
+
+    # ── Los 16 extras describen el problema, no ruido ──────────────────
+    # Con la arena vacía: todo libre, nada detrás, sin contacto.
+    for otro in env.obstacle_ids + env.cylinder_ids + env.l_wall_ids:
+        p.resetBasePositionAndOrientation(otro, [0, 60, 0], [0, 0, 0, 1])
+    p.resetBasePositionAndOrientation(
+        env.robot, [0.0, 0.0, env.BASE_Z], [0, 0, 0, 1]
+    )
+    env._scan_lidar()
+    libre = env._problem_obs()
+    assert libre.shape == (16,), libre.shape
+    assert libre.min() >= -1.0 and libre.max() <= 1.0, (
+        f"extra fuera de rango: min={libre.min():.3f} max={libre.max():.3f}"
+    )
+    assert libre[15] > 0.9, f"arena vacía y solo {libre[15]:.2f} del abanico libre"
+    assert libre[8] > 0.9 and libre[9] > 0.9, "costados tapados en arena vacía"
+    assert libre[10] > 0.9, f"hueco de {libre[10]:.2f}π con todo despejado"
+
+    # Pared al frente: el despeje frontal y el del rumbo al objetivo caen.
+    frente_antes = float(env.front_clearance(35.0))
+    pared = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.05, 1.5, 0.5])
+    cuerpo_frente = p.createMultiBody(0.0, pared, -1, [0.60, 0.0, 0.5])
+    env._scan_lidar()
+    tapado = env._problem_obs()
+    assert float(env.front_clearance(35.0)) < frente_antes - 0.2, (
+        "la pared al frente no bajó el despeje frontal"
+    )
+    assert tapado[12] > libre[12], (
+        "el despeje en el rumbo al objetivo no reaccionó a la pared"
+    )
+    assert tapado[15] < libre[15], "la fracción libre no bajó con la pared"
+    p.removeBody(cuerpo_frente)
+
+    # Pared a la izquierda: el costado izquierdo se tapa y el derecho no.
+    cuerpo_izq = p.createMultiBody(0.0, pared, -1, [0.0, 0.60, 0.5])
+    env._scan_lidar()
+    lateral = env._problem_obs()
+    assert lateral[8] > libre[8] - 0.05, (
+        f"el costado derecho no debería taparse: {lateral[8]:.2f} vs {libre[8]:.2f}"
+    )
+    assert lateral[9] < libre[9] - 0.2, (
+        f"el costado izquierdo no reaccionó a la pared: "
+        f"{lateral[9]:.2f} vs {libre[9]:.2f}"
+    )
+    p.removeBody(cuerpo_izq)
 
     # ── Episodio completo con acciones aleatorias ──────────────────────
     obs, _ = env.reset(seed=42)

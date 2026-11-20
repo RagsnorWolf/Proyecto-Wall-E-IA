@@ -99,7 +99,7 @@ Simulador Wall-E\
   WALL-E Entrenar Cerebro.bat   entrena el PPO
   WALL-E Robot Real.bat         manda las órdenes al ESP32 por WiFi
   interactive_walle.py          la GUI, el chat, el controlador
-  walle_env_v3.py               el entorno V5: observación de 58 números
+  walle_env_v3.py               el entorno V6: observación de 66 números
   train_walle_v5.py             el entrenamiento
   transplant_v4_to_v5.py        trasplante de pesos V4 → V5
   models\                       las políticas entrenadas (.zip)
@@ -217,7 +217,7 @@ checkpoint intermedio no: es basura regenerable.
 Formato: `tipo(carpeta): qué cambió`
 
 ```
-feat(simulador): recompensa de holgura en el entorno V5
+feat(simulador): recompensa de holgura en el entorno V6
 fix(cerebro): timeout del ACK del UNO
 docs(agente): puesta en marcha con Ollama
 ```
@@ -291,7 +291,7 @@ ESP32 → UNO (GPIO17 → D12) va directo.
 ### 6.2 El entorno del simulador (V5)
 
 ```
-Observación: 58 números
+Observación: 66 números
   ├── 14  base (posición, orientación, velocidad, contacto)  ← V2 original
   ├── 36  abanico LiDAR frontal de 36 rayos                  ← V4
   └──  8  resolución de atascos                              ← V5
@@ -372,7 +372,7 @@ Estas están resueltas. Si alguien las vuelve a tocar, se rompe.
                                    las cuatro se ven; antes solo la de 40
 3. Reparto del abanico             36 rayos, 3.48° al frente, 8.4° al costado
 4. El anillo sigue completo        (72,) y coincide con el centro del abanico
-5. Observación                     (58,) y el espacio de Gymnasium igual
+5. Observación                     (66,) y el espacio de Gymnasium igual
 ```
 
 `test_v4_smoke.py` lo repite como aserción: si alguien vuelve a romper el barrido,
@@ -390,8 +390,8 @@ falla con el número exacto en vez de entrenar un robot ciego durante horas.
 | Consola de control | ✅ | 97 órdenes, 97 ACK, 0 reintentos, 0 timeouts |
 | Cadena simulador → UDP → puente | ✅ | 0 errores, parada limpia al cerrar |
 | Modo manual del simulador | ✅ | Avanzó 0,95 m de 1,00 · giró 43° de 45° |
-| Modo PPO del simulador | ✅ carga y decide | `RecurrentPPO (LSTM)`, obs 58D, política cargada |
-| Entrenamiento | ✅ | 4096 pasos, 104 fps, modelo guardado |
+| Modo PPO del simulador | ✅ carga y decide | `RecurrentPPO (LSTM)`, obs 66D, política cargada |
+| Entrenamiento | ✅ | 1,2 M pasos, ~100 fps, `models\walle_ppo_model_v6.zip` |
 | GUI | ✅ | 59 FPS estables, textura aplicada, sin ejes |
 
 ### Lo que está pendiente
