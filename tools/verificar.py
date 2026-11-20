@@ -109,6 +109,35 @@ def chequear_obs() -> int:
         return 1
 
     print(f"OBS_DIM = {valor} OK")
+
+    # El abanico tiene que cerrar: si alguien cambia un tramo y no el total,
+    # el entorno levanta RuntimeError al importar y el entrenamiento no arranca.
+    faltan = [
+        k
+        for k in ("FAN_INNER_RAYS", "FAN_OUTER_RAYS", "SENSOR_COUNT",
+                  "FRONT_CONE_DEG")
+        if k not in constantes
+    ]
+    if faltan:
+        print(f"faltan constantes del abanico: {faltan}")
+        return 1
+
+    total = int(constantes["FAN_INNER_RAYS"]) + 2 * int(
+        constantes["FAN_OUTER_RAYS"]
+    )
+    if total != int(constantes["SENSOR_COUNT"]):
+        print(
+            f"el abanico no cierra: {constantes['FAN_INNER_RAYS']} + "
+            f"2x{constantes['FAN_OUTER_RAYS']} = {total}, "
+            f"SENSOR_COUNT = {constantes['SENSOR_COUNT']}"
+        )
+        return 1
+
+    print(
+        f"abanico = {total} rayos "
+        f"({constantes['FAN_INNER_RAYS']} al frente, "
+        f"{constantes['FAN_OUTER_RAYS']} por costado) OK"
+    )
     return 0
 
 

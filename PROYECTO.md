@@ -296,6 +296,32 @@ Acción: 2 continuas (oruga izquierda, oruga derecha)
 Los primeros 50 números son exactamente los del V4, en el mismo orden. Por eso el
 trasplante de pesos funciona sin reentrenar de cero.
 
+**Cómo mira el LiDAR (corregido en esta tanda):**
+
+```
+Plano de escaneo     SENSOR_FOOT_Z = 0.06 m sobre el suelo LOCAL del robot
+                     (antes: 0.06 m sobre la base = 0.21 m del piso,
+                      y un obstáculo de 12 cm era invisible)
+
+Origen de los rayos  centro del chasis (LIDAR_ORIGIN_OFFSET = 0.0)
+                     el robot se saca del broadphase durante el barrido
+
+Distancias           desde el PARAGOLPES: se resta el semieje del chasis
+                     en la dirección del rayo (BODY_HALF_X/Y)
+                     0.00 m = tocando, no "a 17 cm del centro"
+
+Anillo               72 rayos, 360°, cada 5°   → distancia mínima, huecos, rumbo
+Abanico              36 rayos, −90° a +90°     → los 36 números de la observación
+   ├── 24 rayos de −40° a +40°, uno cada 3.48°  ← donde el robot decide
+   └──  6 + 6 de ±48° a ±90°, uno cada 8.4°     ← cobertura lateral
+Cono frontal         FRONT_CONE_DEG = 35°  → 18 rayos (antes 13 con reparto uniforme)
+```
+
+Un reparto uniforme de 36 rayos en 180° gasta 5° por rayo y deja el cono de
+decisión con muy poca resolución: la diferencia entre una caja centrada y una
+esquina entraba en el mismo rayo. El reparto denso-al-frente arregla eso sin
+gastar dimensiones de observación.
+
 **Recompensas V5:**
 
 ```
@@ -318,14 +344,34 @@ Estas están resueltas. Si alguien las vuelve a tocar, se rompe.
 
 | Trampa | Consecuencia | Estado |
 |---|---|---|
-| `p.rayTestBatch` con argumentos por posición | Ignora `parentObjectUniqueId`, cada rayo pega contra el propio chasis a fracción 0, medio anillo de ceros, el robot frena en la nada | **Usar argumentos por nombre** |
+| `p.rayTestBatch(..., parentObjectUniqueId=robot, parentLinkIndex=-1)` | En PyBullet 3.2.7 **anula el lote entero**: todas las lecturas vuelven `(-1, frac 1.0)`, que el entorno interpreta como "libre a 6 m". WALL-E ve el mundo vacío y se come la pared | **Sacar al robot del broadphase**: `setCollisionFilterGroupMask(robot, -1, 0, 0)` → barrido → restaurar a `(1, 0xFFFF)` en un `finally` |
+| `parentLinkIndex=0` como alternativa | Excluye de verdad, pero depende de que el robot tenga al menos un link. Un robot sin links vuelve al fallo de arriba | No usar: el filtro de colisión no depende de la geometría |
 | `LIDAR_THREADS > 0` | Access violation en procesos hijos | `LIDAR_THREADS = 0` |
+| Plano de escaneo a altura fija sobre la base | `pos[2] + 0.06` = 0.21 m del piso: una caja de 12 cm, una rampa baja o el borde de un escalón pasan por debajo del sensor | `pos[2] - BASE_Z + SENSOR_FOOT_Z` (altura sobre el suelo local) |
+| Distancia medida desde el centro del robot | Todos los umbrales (`NEAR_OBSTACLE_M`, `SAFE_GO_M`, `SAFE_SLOW_M`) quedaban 17,5 cm corridos y el robot frenaba lejos de todo | Restar `_body_radius(theta)` en cada rayo: 0 = tocando |
 | `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()` | Usar `DummyVecEnv` |
 | `rich` con stdout redirigido | Se bloquea | `progress_bar=False` |
 | `torch.set_num_threads` alto en inferencia | 1,5 s por paso | 1 hilo en inferencia, núcleos−2 en entrenamiento |
 | `COV_ENABLE_RGB_AXES` en PyBullet 3.2.7 | No existe, tira excepción | `getattr(p, "COV_ENABLE_RGB_AXES", None)` |
 | Un proceso GUI colgado | Deja ventana huérfana y bloquea el siguiente arranque | El `.bat` limpia antes de lanzar |
 | `PYTHONUTF8` sin definir | Un acento en un `print` mata el proceso | Siempre `PYTHONUTF8=1` |
+
+### 6.4 Cómo se comprueba que el sensor no miente
+
+`tools_diag_lidar.py` mide contra la geometría real, no contra lo que uno cree:
+
+```
+1. Distancia desde el paragolpes   caja a 2.00 / 1.20 / 0.80 / 0.50 / 0.47 m
+                                   error < 1 mm en los cinco casos
+2. Objetos bajos                   cajas de 8, 12, 20 y 40 cm de alto
+                                   las cuatro se ven; antes solo la de 40
+3. Reparto del abanico             36 rayos, 3.48° al frente, 8.4° al costado
+4. El anillo sigue completo        (72,) y coincide con el centro del abanico
+5. Observación                     (58,) y el espacio de Gymnasium igual
+```
+
+`test_v4_smoke.py` lo repite como aserción: si alguien vuelve a romper el barrido,
+falla con el número exacto en vez de entrenar un robot ciego durante horas.
 
 ---
 

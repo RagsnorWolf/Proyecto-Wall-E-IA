@@ -68,9 +68,22 @@ Para reanudar desde un checkpoint:
 
 ## Detalles que costaron encontrar
 
-- **`p.rayTestBatch` exige argumentos por nombre.** Por posición ignora
-  `parentObjectUniqueId` y cada rayo impacta el propio chasis a fracción 0:
-  medio anillo de ceros y el robot frenando en la nada.
+- **`p.rayTestBatch` con `parentObjectUniqueId` anula el lote entero.** En esta
+  build (PyBullet 3.2.7) todas las lecturas vuelven `(-1, fracción 1.0)`, que el
+  entorno lee como "libre a 6 m": el robot ve el mundo vacío y se come la pared.
+  `parentLinkIndex=0` sí excluye, pero depende de que el robot tenga links. Lo
+  que se usa: sacar al robot del broadphase con
+  `setCollisionFilterGroupMask(robot, -1, 0, 0)`, barrer y restaurar en un
+  `finally`. Determinista y sin depender de la geometría.
+- **El plano de escaneo va a 6 cm del SUELO, no de la base.** `pos[2] + 0.06`
+  daba 0.21 m del piso y una caja de 12 cm era invisible para el sensor aunque
+  el robot chocara con ella.
+- **Las distancias se miden desde el paragolpes.** Se resta el semieje del
+  chasis en la dirección del rayo. Si no, `0.00` significa "a 17 cm del centro"
+  y todos los umbrales quedan corridos: el robot frena lejos de todo.
+- **El abanico es denso al frente.** 24 rayos en ±40° (uno cada 3.48°) y 6 por
+  lado hasta ±90°. Un reparto uniforme gastaba 5° por rayo y metía una caja
+  centrada y una esquina en el mismo rayo.
 - **`LIDAR_THREADS = 0`.** Con hilos, el pool de PyBullet revienta con access
   violation en procesos hijos.
 - **`SubprocVecEnv` no sirve en este equipo.** Dos hijos o más mueren con
@@ -87,4 +100,5 @@ Para reanudar desde un checkpoint:
 | Ventana en damero, sin robot | Ventana huérfana de una corrida anterior | Cerrar todo y relanzar el `.bat` |
 | Modo PPO no carga | Falta el `.zip` en `models\` | Ver la tabla de arriba |
 | Se mueve lentísimo | Hay un entrenamiento comiendo CPU | Cerrarlo antes de simular |
-| Frena lejos de los obstáculos | LiDAR mal configurado | Ver `rayTestBatch` arriba |
+| Frena lejos de los obstáculos | Umbrales en metros desde el centro | Ya están convertidos a metros desde el paragolpes |
+| «Ve todo libre» y choca | El lote de rayos volvió vacío | Correr `tools_diag_lidar.py`: si el mínimo es 6.00 m con una caja delante, el barrido está roto |

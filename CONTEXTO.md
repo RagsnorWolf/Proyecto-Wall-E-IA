@@ -236,7 +236,7 @@ docs(agente): puesta en marcha con Ollama
 
 | Bug | Consecuencia | Estado |
 |---|---|---|
-| `p.rayTestBatch` con argumentos por posición | Ignoraba `parentObjectUniqueId`; cada rayo pegaba contra el propio chasis y el robot frenaba en la nada | Corregido: argumentos por nombre |
+| `p.rayTestBatch` con `parentObjectUniqueId` | Anula el lote entero en PyBullet 3.2.7: todo vuelve "libre a 6 m" y el robot se come la pared | Corregido: el robot se saca del broadphase durante el barrido |
 | `LIDAR_THREADS > 0` | Access violation en procesos hijos | `LIDAR_THREADS = 0` |
 | `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()` | Se entrena con `DummyVecEnv` |
 | Faltaba `sb3-contrib` en `requirements.txt` | Una instalación limpia no podía cargar el modo PPO | Corregido |

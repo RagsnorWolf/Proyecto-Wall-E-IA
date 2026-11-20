@@ -193,8 +193,16 @@ UNSTICK_STILL_CONTACT_EXTRA_S = 0.40  # prórroga si sigue tocando
 #   libre   -> acelera
 #   cerca   -> modula la velocidad por la distancia
 #   pegado  -> rodea (gira al hueco, avanza, vuelve al rumbo del objetivo)
-SAFE_GO_M = 0.60             # por encima: vía libre, acción completa
-SAFE_SLOW_M = 0.28           # por debajo: se detiene y rodea
+#
+# OJO: desde la corrección del LiDAR estas distancias se miden desde el
+# PARAGOLPES, no desde el centro del robot. `front_clearance()` resta el
+# semieje del chasis en la dirección del rayo, así que 0.00 significa
+# "tocando" y un valor de 0.42 equivale a los 0.60 de antes (medidos desde el
+# centro). Los números de abajo ya están convertidos: usarlos con la semántica
+# vieja frenaba el robot 17.5 cm antes de lo debido, que es justo el "frena en
+# seco lejos de todo" que se venía reportando.
+SAFE_GO_M = 0.42             # por encima: vía libre, acción completa
+SAFE_SLOW_M = 0.12           # por debajo: se detiene y rodea
 AVOID_MAX_DETOURS = 14       # desvíos por orden antes de darse por vencido
 AVOID_TURN_S = 0.50          # (heredado) referencia de la fase de giro
 AVOID_TURN_MAX_S = 8.00      # tope de tiempo del giro del rodeo

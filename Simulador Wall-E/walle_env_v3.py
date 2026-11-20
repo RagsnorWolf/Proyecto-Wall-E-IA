@@ -1,18 +1,25 @@
 """
-WALL-E · Fase 5 — Explorador Autónomo V5 (LiDAR 72 a ras de suelo, obs 58D)
+WALL-E · Fase 5 — Explorador Autónomo V5 (LiDAR a ras de suelo, obs 58D)
 
 Entorno Gymnasium + PyBullet de nivel industrial para exploración autónoma.
 
 Características V5:
-- LiDAR 2D virtual de 72 rayos (cada 5°, 360°) con rayTestBatch (rápido).
-  El plano de escaneo va a la altura de los pies y los rayos nacen en el
-  centro del robot: ve lo que está a punto de tocar.
+- LiDAR 2D virtual: anillo de 72 rayos (cada 5°, 360°) para el entorno, más
+  un abanico de 36 rayos para la política. Los dos en una sola llamada a
+  rayTestBatch.
+- El plano de escaneo va a 6 cm del SUELO local, no a una altura fija sobre
+  el chasis. Antes quedaba a 0.21 m y un obstáculo de 12 cm era invisible.
+- Las distancias se miden desde el PARAGOLPES: se descuenta el radio del
+  chasis en la dirección del rayo. 0 significa "tocando".
+- El abanico de 36 rayos es denso al frente (24 rayos en ±40°, uno cada 3,5°)
+  y más abierto a los costados (6 por lado hasta ±90°). Un reparto uniforme
+  gastaba 5° por rayo y dejaba el cono de decisión con muy poca resolución.
 - Observación de 58 dimensiones:
     [x, y, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz,
      goal, goal_bearing,
-     s0..s35,            <- 36 rayos frontales (180°) normalizados [0,1]
-     claridad_frontal,   <- 1 - min(frontal)/alcance
-     distancia_minima,   <- 1 - min(72)/alcance
+     s0..s35,            <- 36 rayos del abanico, normalizados [0,1]
+     claridad_frontal,   <- 1 - min(cono ±35°)/alcance
+     distancia_minima,   <- 1 - min(anillo 72)/alcance
      obst_sin, obst_cos, <- rumbo del obstáculo más cercano
      libre_sin, libre_cos, <- dirección del hueco más ancho (escape)
      contacto, atascado] <- banderas de resolución de problemas
@@ -53,17 +60,44 @@ from walle_env_v2 import WallEEnvV2, wrap_angle  # noqa: F401
 # --------------------------------------------------------------------- #
 # Constantes V4
 # --------------------------------------------------------------------- #
-LIDAR_RAYS = 72                 # LiDAR 2D completo (360°, cada 5°)
-SENSOR_COUNT = 36               # rayos frontales incluidos en la observación
+LIDAR_RAYS = 72                 # anillo completo 360°, cada 5° (para el entorno)
+SENSOR_COUNT = 36               # rayos que entran en la observación
 LIDAR_MAX_DIST = 6.0            # alcance máximo en metros
-# El plano de escaneo va a la altura de los pies: así el LiDAR ve lo que
-# WALL-E está a punto de tocar (cajas bajas, rampas, bordes) y no pasa por
-# encima de obstáculos pequeños.
-SENSOR_HEIGHT = 0.06            # altura del LiDAR sobre la base
+
+# --- Geometría del barrido --------------------------------------------- #
+# El plano de escaneo va a la altura del PARAGOLPES, medido desde el suelo
+# local del robot.
+#
+# Antes era SENSOR_HEIGHT=0.06 sumado a pos[2], y como la base está en 0.15 el
+# plano quedaba a 0.21 m del piso: un objeto de 12 cm de alto era invisible
+# para el LiDAR aunque el robot chocara contra él. Medido en esta máquina:
+#   plano a 0.21 m -> caja de 12 cm a 0.75 m: lectura 6.000 m (no la ve)
+#   plano a 0.06 m -> la misma caja: lectura correcta
+SENSOR_FOOT_Z = 0.06
+# Semiejes del chasis (walle_env_v2: chassis_half = [0.175, 0.15, 0.14]).
+# El LiDAR mide desde el CENTRO del robot, pero el choque ocurre en el borde.
+# Restar este radio hace que 0 signifique "tocando", que es lo que asumen
+# todos los umbrales de recompensa (NEAR_OBSTACLE_M, STOP, etc.).
+BODY_HALF_X = 0.175
+BODY_HALF_Y = 0.150
 # Los rayos nacen en el centro del robot y se excluye el propio cuerpo con
 # parentObjectUniqueId. Antes nacían a 30 cm: al tocar una pared el origen
 # quedaba DENTRO del obstáculo y el sensor se quedaba ciego justo al chocar.
-LIDAR_ORIGIN_OFFSET = 0.0       # desplazamiento radial (0 = centro exacto)
+LIDAR_ORIGIN_OFFSET = 0.0
+
+# --- Reparto del abanico de 36 rayos ----------------------------------- #
+# Un abanico uniforme de ±90° gasta 5° por rayo y deja solo 13 rayos en el
+# cono donde el robot decide. Se concentra la resolución al frente:
+#   24 rayos de -40° a +40°  (3,5° de separación)  <- donde se decide
+#   6 + 6 rayos de ±48° a ±90° (8,4°)              <- cobertura lateral
+FAN_INNER_DEG = 40.0
+FAN_INNER_RAYS = 24
+FAN_OUTER_START_DEG = 48.0
+FAN_OUTER_END_DEG = 90.0
+FAN_OUTER_RAYS = 6
+# Cono que cuenta como "tengo algo delante" para premios y castigos.
+FRONT_CONE_DEG = 35.0
+
 # Hilos del barrido de rayos. Medido en esta build (Nov 2026), 72 rayos:
 #   nt=0 -> 0.13 ms, nt=2 -> 0.10 ms, nt=4 -> 0.11 ms (en régimen estable).
 # El primer escaneo con nt>0 paga la creación del pool (~75 ms) y, dentro de
@@ -111,6 +145,26 @@ COLLISION_MIN_PENETRATION_M = 0.001  # 1 mm de penetración mínima
 OBS_EXTRAS = 8
 OBS_DIM = 14 + SENSOR_COUNT + OBS_EXTRAS
 
+if SENSOR_COUNT != FAN_INNER_RAYS + 2 * FAN_OUTER_RAYS:  # falla ruidoso
+    raise RuntimeError(
+        f"el abanico no cierra: {FAN_INNER_RAYS} + 2x{FAN_OUTER_RAYS} "
+        f"!= SENSOR_COUNT={SENSOR_COUNT}"
+    )
+
+
+def build_fan_angles() -> np.ndarray:
+    """Ángulos del abanico de la observación, en radianes, de -90° a +90°.
+
+    Denso al frente (donde el robot decide) y más abierto a los costados
+    (donde solo necesita saber si hay algo pegado).
+    """
+    inner = np.linspace(-FAN_INNER_DEG, FAN_INNER_DEG, FAN_INNER_RAYS)
+    outer = np.linspace(
+        FAN_OUTER_START_DEG, FAN_OUTER_END_DEG, FAN_OUTER_RAYS
+    )
+    degrees = np.concatenate([inner, outer, -outer])
+    return np.sort(np.radians(degrees)).astype(np.float32)
+
 
 class WallEEnvV3(WallEEnvV2):
     """Entorno V4: LiDAR 72 + obstáculos complejos + recompensas múltiples."""
@@ -157,19 +211,30 @@ class WallEEnvV3(WallEEnvV2):
         self._sensor_noise_std = sensor_noise_std
         self._collision_terminates = bool(collision_terminates)
 
-        # LiDAR 2D de 72 rayos
+        # LiDAR: anillo de 72 para el entorno + abanico de 36 para la política.
         self.lidar_rays = LIDAR_RAYS
         self.lidar_max_dist = LIDAR_MAX_DIST
         self.lidar_meters = np.full(
             LIDAR_RAYS, LIDAR_MAX_DIST, dtype=np.float32
         )
         self.lidar_norm = np.ones(LIDAR_RAYS, dtype=np.float32)
-        # Índices de los 36 rayos frontales (180°) para la observación.
-        # Los rayos van de 0° a 355° en pasos de 5°; el frente del robot es
-        # el rayo 0, así que el semicírculo frontal son 54..71 y 0..17.
-        self._front_indices: List[int] = list(range(54, 72)) + list(
-            range(0, 18)
+
+        # Abanico de la observación: denso al frente, abierto a los costados.
+        self.fan_angles = build_fan_angles()
+        self.fan_meters = np.full(SENSOR_COUNT, LIDAR_MAX_DIST, dtype=np.float32)
+        self.fan_norm = np.ones(SENSOR_COUNT, dtype=np.float32)
+        # Máscara del cono frontal: los rayos que cuentan como "al frente".
+        self._fan_front_mask = np.abs(self.fan_angles) <= math.radians(
+            FRONT_CONE_DEG
         )
+        # Compatibilidad: índices del anillo de 72 más cercanos a cada rayo del
+        # abanico. Los scripts viejos que hacían lidar_meters[_front_indices]
+        # siguen devolviendo 36 números coherentes.
+        step_ring = 2.0 * math.pi / LIDAR_RAYS
+        self._front_indices: List[int] = [
+            int(round(float(a) / step_ring)) % LIDAR_RAYS
+            for a in self.fan_angles
+        ]
 
         # Chunk mapper
         self.chunk_mapper = ChunkMapper(cell_size=1.0)
@@ -550,74 +615,116 @@ class WallEEnvV3(WallEEnvV2):
         ]
 
     # ------------------------------------------------------------------ #
-    # LiDAR 2D de 72 rayos (rayTestBatch: una sola llamada por paso)
+    # LiDAR: anillo de 72 + abanico de 36 (una sola llamada por paso)
     # ------------------------------------------------------------------ #
-    def _scan_lidar(self) -> None:
-        """Escanea 360° con 72 rayos y cachea distancias reales y normalizadas.
+    def _body_radius(self, theta: float) -> float:
+        """Distancia del centro del chasis a su borde en la dirección `theta`.
 
-        El plano de escaneo va a la altura de los pies (SENSOR_HEIGHT) y los
-        rayos salen del centro del robot, excluyendo su propio cuerpo con
-        parentObjectUniqueId. Así el sensor sigue viendo el obstáculo incluso
-        cuando el chasis ya lo está tocando.
+        El LiDAR mide desde el centro del robot, pero el choque ocurre en el
+        paragolpes. Restar este radio convierte la lectura en "metros hasta
+        tocar", que es lo que asumen los umbrales de recompensa.
+
+        Caja de semiejes (BODY_HALF_X, BODY_HALF_Y): la salida del rayo por la
+        cara correspondiente es min(hx/|cos|, hy/|sin|).
+        """
+        c = abs(math.cos(theta))
+        s = abs(math.sin(theta))
+        limite_x = BODY_HALF_X / c if c > 1e-6 else math.inf
+        limite_y = BODY_HALF_Y / s if s > 1e-6 else math.inf
+        return min(limite_x, limite_y)
+
+    def _scan_lidar(self) -> None:
+        """Escanea el anillo de 72 y el abanico de 36 en una sola pasada.
+
+        El plano de escaneo va a la altura del paragolpes sobre el suelo local
+        (SENSOR_FOOT_Z), no a una altura fija sobre el centro del chasis. Antes
+        el plano quedaba a 0.21 m y un obstáculo de 12 cm era invisible.
+
+        Las distancias se devuelven desde el borde del robot: 0 = tocando.
         """
         pos, quat = p.getBasePositionAndOrientation(self.robot)
         yaw = float(p.getEulerFromQuaternion(quat)[2])
-        z = pos[2] + SENSOR_HEIGHT
+        # Altura sobre el suelo local: en llano da SENSOR_FOOT_Z exacto; sobre
+        # una rampa sube con el robot, porque el sensor está atornillado a él.
+        z = max(0.02, pos[2] - self.BASE_Z + SENSOR_FOOT_Z)
 
-        froms = []
-        tos = []
-        for i in range(LIDAR_RAYS):
-            angle = yaw + 2.0 * math.pi * i / LIDAR_RAYS
-            dx = math.cos(angle)
-            dy = math.sin(angle)
-            froms.append(
-                [
-                    pos[0] + dx * LIDAR_ORIGIN_OFFSET,
-                    pos[1] + dy * LIDAR_ORIGIN_OFFSET,
-                    z,
-                ]
-            )
-            tos.append(
-                [
-                    pos[0] + dx * LIDAR_MAX_DIST,
-                    pos[1] + dy * LIDAR_MAX_DIST,
-                    z,
-                ]
-            )
+        n_ring = LIDAR_RAYS
+        n_fan = int(self.fan_angles.size)
+        total = n_ring + n_fan
 
-        # La exclusión del propio robot SOLO funciona por nombre en esta
-        # build. Pasada por posición (from, to, parent, link, threads) el
-        # parentObjectUniqueId se ignora y cada rayo impacta el chasis a
-        # fracción 0: medio anillo de ceros, "obstáculo a 0.00 m" delante
-        # siempre, y WALL-E frenando en mitad de la nada. Por nombre excluye
-        # de verdad (body=-1, frac=1.0 = sin impacto).
-        results = p.rayTestBatch(
-            froms,
-            tos,
-            parentObjectUniqueId=self.robot,
-            parentLinkIndex=-1,
-            numThreads=LIDAR_THREADS,
-        )
-        meters = np.empty(LIDAR_RAYS, dtype=np.float32)
-        ray_len = LIDAR_MAX_DIST - LIDAR_ORIGIN_OFFSET
-        for i, hit in enumerate(results):
-            frac = float(hit[2])
+        froms: list[list[float]] = []
+        tos: list[list[float]] = []
+        thetas = np.empty(total, dtype=np.float64)
+
+        for i in range(n_ring):
+            theta = 2.0 * math.pi * i / n_ring
+            thetas[i] = theta
+            angle = yaw + theta
+            dx, dy = math.cos(angle), math.sin(angle)
+            froms.append([pos[0] + dx * LIDAR_ORIGIN_OFFSET,
+                          pos[1] + dy * LIDAR_ORIGIN_OFFSET, z])
+            tos.append([pos[0] + dx * LIDAR_MAX_DIST,
+                        pos[1] + dy * LIDAR_MAX_DIST, z])
+
+        for j in range(n_fan):
+            theta = float(self.fan_angles[j])
+            thetas[n_ring + j] = theta
+            angle = yaw + theta
+            dx, dy = math.cos(angle), math.sin(angle)
+            froms.append([pos[0] + dx * LIDAR_ORIGIN_OFFSET,
+                          pos[1] + dy * LIDAR_ORIGIN_OFFSET, z])
+            tos.append([pos[0] + dx * LIDAR_MAX_DIST,
+                        pos[1] + dy * LIDAR_MAX_DIST, z])
+
+        # La exclusión por parentObjectUniqueId NO sirve en esta build. Medido:
+        #   parentLinkIndex=-1 (u omitido) -> el lote entero devuelve (-1, 1.0)
+        #   parentLinkIndex=0 o 1         -> excluye el cuerpo, pero depende de
+        #                                    que el robot tenga al menos un link
+        # Un lote vacío se lee como "todo libre a 6 m" y WALL-E se come la pared.
+        # Se saca al robot del broadphase mientras dura el barrido, que es
+        # determinista y no depende de la cantidad de links. No hay step de
+        # simulación entre el apagado y el encendido, así que la física no ve
+        # nada raro. Grupo 1 / máscara 0xFFFF es el valor por defecto de
+        # createMultiBody en pybullet 3.2.7.
+        p.setCollisionFilterGroupMask(self.robot, -1, 0, 0)
+        try:
+            results = p.rayTestBatch(froms, tos, numThreads=LIDAR_THREADS)
+        finally:
+            p.setCollisionFilterGroupMask(self.robot, -1, 1, 0xFFFF)
+
+        meters = np.empty(total, dtype=np.float32)
+        for i in range(total):
+            hit = results[i]
             # Cinturón y tirantes: si alguna build vuelve a ignorar la
             # exclusión, un impacto contra el propio cuerpo no es distancia.
             if int(hit[0]) == self.robot:
                 meters[i] = LIDAR_MAX_DIST
                 continue
-            # La distancia real desde el centro del robot es offset + frac*ray_len.
-            dist = LIDAR_ORIGIN_OFFSET + frac * ray_len
+
+            frac = float(hit[2])
+            if frac >= 1.0:
+                # Sin impacto: espacio libre hasta el alcance máximo. No se le
+                # resta el radio del chasis para que "libre" valga exactamente
+                # LIDAR_MAX_DIST y los umbrales de hueco libre sigan claros.
+                meters[i] = LIDAR_MAX_DIST
+                continue
+
+            # Distancia al obstáculo medida desde el paragolpes, no desde el
+            # centro. Por debajo de 0 el robot ya está penetrando: 0 = tocando.
+            dist = frac * LIDAR_MAX_DIST - self._body_radius(float(thetas[i]))
             if self._sensor_noise_std > 0.0:
                 dist += float(
                     self.np_random.normal(0.0, self._sensor_noise_std)
                 )
             meters[i] = min(max(dist, 0.0), LIDAR_MAX_DIST)
 
-        self.lidar_meters = meters
+        self.lidar_meters = meters[:n_ring]
         self.lidar_norm = np.clip(
-            1.0 - meters / LIDAR_MAX_DIST, 0.0, 1.0
+            1.0 - self.lidar_meters / LIDAR_MAX_DIST, 0.0, 1.0
+        ).astype(np.float32)
+        self.fan_meters = meters[n_ring:]
+        self.fan_norm = np.clip(
+            1.0 - self.fan_meters / LIDAR_MAX_DIST, 0.0, 1.0
         ).astype(np.float32)
 
     # ------------------------------------------------------------------ #
@@ -671,7 +778,10 @@ class WallEEnvV3(WallEEnvV2):
         """8 valores que describen el problema inmediato del robot."""
         meters = self.lidar_meters
         max_d = float(self.lidar_max_dist)
-        front = meters[self._front_indices]
+        # "Al frente" es el cono de decisión, no el semicírculo entero: con
+        # ±90° una pared al costado contaba como obstáculo frontal y el robot
+        # frenaba en mitad de la nada.
+        front = self.fan_meters[self._fan_front_mask]
         front_min = float(front.min()) if front.size else max_d
         index, nearest = self._nearest_ray()
         step = 2.0 * math.pi / max(1, int(meters.size))
@@ -699,7 +809,7 @@ class WallEEnvV3(WallEEnvV2):
         base_obs = super()._get_obs()  # 14D de V2
         if self._enable_sensors:
             self._scan_lidar()
-            front = self.lidar_norm[self._front_indices]
+            front = self.fan_norm
             extras = self._problem_obs()
         else:
             front = np.ones(SENSOR_COUNT, dtype=np.float32)
@@ -811,23 +921,19 @@ class WallEEnvV3(WallEEnvV2):
     def front_clearance(self, half_angle_deg: float = 30.0) -> float:
         """Distancia (m) al obstáculo más cercano del cono frontal.
 
-        El abanico completo de 72 rayos barre 360°; `_front_indices` cubre
-        ±90°, demasiado ancho para decidir "tengo algo delante". Aquí se
-        recorta el cono a `half_angle_deg` alrededor del frente real (rayo 0 =
-        rumbo del robot), que es la medida que usa el controlador para
-        acelerar, modular o rodear.
+        Se mide sobre el abanico de 36 rayos, que está denso al frente: en el
+        cono de ±30° hay 17 rayos separados 3,5°, contra 13 separados 5° del
+        anillo uniforme. La distancia viene desde el paragolpes.
 
         Devuelve `LIDAR_MAX_DIST` si el cono está despejado.
         """
-        n = int(self.lidar_meters.size)
-        if n == 0:
+        if not self.fan_meters.size:
             return float(LIDAR_MAX_DIST)
-        span = max(1, int(round(n * half_angle_deg / 360.0)))
-        indices = [k % n for k in range(-span, span + 1)]
-        cone = self.lidar_meters[indices]
-        if cone.size == 0:
+        limit = math.radians(float(half_angle_deg))
+        mask = np.abs(self.fan_angles) <= limit
+        if not mask.any():
             return float(LIDAR_MAX_DIST)
-        return float(cone.min())
+        return float(self.fan_meters[mask].min())
 
     def contact_info(self) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
         """Puntos y normales de contacto del último paso (para la GUI)."""
@@ -887,7 +993,14 @@ class WallEEnvV3(WallEEnvV2):
         self._stuck_steps = 0
         self._prev_nearest = LIDAR_MAX_DIST
         self._prev_front_min = LIDAR_MAX_DIST
-        return super().reset(seed=seed, options=options)
+        obs, info = super().reset(seed=seed, options=options)
+        # El reset ya barrió el LiDAR al construir la observación: se deja el
+        # abanico en info para que la GUI y los diagnósticos lo vean sin tener
+        # que volver a escanear.
+        if self._enable_sensors:
+            info["fan_meters"] = self.fan_meters.tolist()
+            info["front_clearance_m"] = self.front_clearance(FRONT_CONE_DEG)
+        return obs, info
 
     def step(
         self, action: np.ndarray
@@ -946,14 +1059,16 @@ class WallEEnvV3(WallEEnvV2):
                 info["trapped"] = True
                 info["trap_sectors"] = sectors
 
-        # ── 5) Shaping suave de proximidad con los sensores frontales ──
-        # lidar_norm: 0 = libre (sin obstáculo), 1 = obstáculo encima.
+        # ── 5) Shaping suave de proximidad con el cono frontal ──
+        # fan_norm: 0 = libre (sin obstáculo), 1 = obstáculo encima.
         sensor_slice = obs[14 : 14 + SENSOR_COUNT]
-        max_sensor = (
-            float(np.max(sensor_slice)) if self._enable_sensors else 0.0
-        )
+        if self._enable_sensors:
+            front_norms = sensor_slice[self._fan_front_mask]
+            max_sensor = float(np.max(front_norms)) if front_norms.size else 0.0
+        else:
+            max_sensor = 0.0
         if max_sensor > 0.85:
-            # Algún rayo frontal detecta algo a menos de ~0.9 m.
+            # Algún rayo del cono frontal detecta algo a menos de ~0.9 m.
             reward += CLOSE_OBSTACLE_PENALTY
         elif max_sensor < 0.50:
             # Todo el frente está despejado a más de 3 m.
@@ -969,7 +1084,7 @@ class WallEEnvV3(WallEEnvV2):
             else LIDAR_MAX_DIST
         )
         front_min = (
-            float(self.lidar_meters[self._front_indices].min())
+            self.front_clearance(FRONT_CONE_DEG)
             if self._enable_sensors
             else LIDAR_MAX_DIST
         )
@@ -1013,6 +1128,9 @@ class WallEEnvV3(WallEEnvV2):
         )
         info["nearest_obstacle_m"] = nearest
         info["front_clearance_m"] = front_min
+        info["fan_meters"] = (
+            self.fan_meters.tolist() if self._enable_sensors else []
+        )
         info["contact"] = contact
         info["stuck"] = self._stuck_steps >= STUCK_STEPS
         info["free_direction"] = (
