@@ -1,111 +1,90 @@
 # Simulador Wall-E
 
-Mundo 2D con física de chasis diferencial: ruedas, inercia de batería, colisiones
-contra muros y cubos de basura que hay que llevar al contenedor. Es la base sobre
-la que entrena el Cerebro y donde el Agente practica sin romper nada.
+El gemelo virtual del robot: física con PyBullet, la cabina 3D con chat, y el
+cerebro PPO que aprende a moverse.
 
-## Instalar (Windows, sin saber nada de Python)
+```
+Simulador Wall-E\
+  INSTALAR.bat                <- una sola vez: crea .venv e instala todo
+  WALL-E Simulador Robot.bat  <- doble clic para abrir el simulador
+  WALL-E Entrenar Cerebro.bat <- entrenar el cerebro PPO
+  WALL-E Robot Real.bat       <- manejar el robot fisico desde el simulador
+  interactive_walle.py        <- la GUI y el controlador
+  walle_env_v3.py             <- el entorno V5: observacion de 58 numeros
+  models\                     <- las politicas entrenadas (.zip)
+  material_0.png              <- textura real del modelo, 2048x2048
+  walle_visual.obj            <- malla del robot
+```
 
-1. Instalá Python 3.10 o superior desde <https://www.python.org/downloads/> y
-   marcá la casilla **"Add python.exe to PATH"** durante la instalación.
-2. Doble clic en **`instalar.bat`**. Crea el entorno, instala pygame y hace una
-   prueba de humo.
-3. Doble clic en **`iniciar.bat`** para jugar.
+## Puesta en marcha
 
-## Instalar (Linux o macOS)
+**1. Python.** Si no está, `winget install Python.Python.3.12`.
+
+**2. Instalar.** Doble clic en `INSTALAR.bat`. Crea `.venv` e instala PyBullet,
+PyTorch, Stable-Baselines3 y sb3-contrib. Tarda unos minutos.
+
+**3. Abrir.** Doble clic en `WALL-E Simulador Robot.bat`.
+
+Si PyBullet no arranca, casi siempre falta el Visual C++ Redistributable:
+https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+## Los tres modos
+
+| Botón | Qué hace |
+|---|---|
+| **Modo: Manual** | Le escribís en castellano: «avanza 2 metros», «gira 90 grados» |
+| **Modo: PPO** | El cerebro autónomo maneja. Carga `models\walle_ppo_model_v5_recovery.zip` |
+| **Robot Real** | Manda las mismas órdenes por WiFi al ESP32. Ver `WALL-E Robot Real.bat` |
+
+## Qué hay en `models\`
+
+| Archivo | Pasos | Estado |
+|---|---|---|
+| `walle_ppo_model_v5_recovery.zip` | 1.3M heredados del V4 | El que usa el modo PPO |
+| `walle_ppo_model_v4_lidar.zip` | 1 303 520 | La base del anterior. Navega bien |
+| `walle_ppo_model_v3_explorer.zip` | — | Histórico, por si hay que comparar |
+
+El V5 se generó con `transplant_v4_to_v5.py`: copia los pesos del V4 y ensancha
+la entrada del LSTM de 50 a 58 con las columnas nuevas en cero. Así arranca
+sabiendo navegar en vez de empezar girando en el sitio.
+
+## Entrenar
+
+Doble clic en `WALL-E Entrenar Cerebro.bat`. **Con el simulador cerrado**: el
+lanzador del simulador mata todo `train_walle*` para liberar CPU.
 
 ```bash
-chmod +x instalar.sh
-./instalar.sh
-.venv/bin/python main.py
+.venv\Scripts\python.exe train_walle_v5.py --timesteps 300000 --workers 2 --vec dummy
 ```
 
-## Instalar a mano
+Checkpoint cada 10 000 pasos en `models\checkpoints\`. A ~90 pasos por segundo,
+300 000 son unos 55 minutos.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe main.py
+Para reanudar desde un checkpoint:
+
+```bash
+.venv\Scripts\python.exe train_walle_v5.py --timesteps 300000 --resume models\walle_ppo_model_v5_recovery.zip
 ```
 
-## Esta carpeta funciona sola
+## Detalles que costaron encontrar
 
-No necesita nada del resto del repositorio: la física, los escenarios y el visor
-están acá adentro. Si descargaste únicamente `Simulador Wall-E/`, alcanza.
+- **`p.rayTestBatch` exige argumentos por nombre.** Por posición ignora
+  `parentObjectUniqueId` y cada rayo impacta el propio chasis a fracción 0:
+  medio anillo de ceros y el robot frenando en la nada.
+- **`LIDAR_THREADS = 0`.** Con hilos, el pool de PyBullet revienta con access
+  violation en procesos hijos.
+- **`SubprocVecEnv` no sirve en este equipo.** Dos hijos o más mueren con
+  `0xC0000005` en `reset()`. Se entrena con `DummyVecEnv`.
+- **`torch.set_num_threads`.** Con pocos hilos el backward del LSTM tarda 27 s
+  por iteración; con demasiados, la inferencia de una sola muestra se arrastra
+  por sincronización. Entrenamiento: núcleos menos dos. Inferencia: un hilo.
 
-## Jugar
+## Si algo no anda
 
-```powershell
-pip install pygame
-python main.py
-python main.py --escenario pasillo
-python main.py --sin-ventana --pasos 500   # prueba headless, sin pygame
-```
-
-Si falta pygame, `iniciar.bat` lo dice con el comando exacto para instalarlo en
-vez de cerrarse con un error de Python. El motor y el modo `--sin-ventana`
-funcionan igual sin él.
-
-| Tecla | Acción |
-|---|---|
-| Flecha arriba | Avanzar |
-| Flecha izquierda / derecha | Girar |
-| Espacio | Recoger cubo o depositar en el contenedor |
-| 1 / 2 / 3 | Cambiar de escenario |
-| R | Reiniciar el episodio |
-| ESC | Salir |
-
-## Escenarios
-
-- **chatarreria** — mapa abierto, 9 cubos, muros sueltos.
-- **pasillo** — corredor con puertas, obliga a girar y planificar.
-- **patio** — columnas en rejilla, 12 cubos alrededor.
-
-Cada escenario acepta `--semilla N` para que la partida sea reproducible.
-
-## Física
-
-Unidades del Sistema Internacional. Nada está inventado:
-
-| Constante | Valor | Por qué |
+| Síntoma | Causa | Arreglo |
 |---|---|---|
-| Radio del chasis | 0.16 m | Tamaño de WALL-E comprimido |
-| Velocidad lineal | 0.24 m/s | Paso de oruga lento y controlable |
-| Velocidad angular | 1.9 rad/s | Giro sobre el sitio |
-| Paso de simulación | 0.1 s | 10 Hz, suficiente para control discreto |
-| Alcance de recogida | 0.26 m | Brazo corto |
-| Batería | 1.2 %/m + 0.005 %/paso | Autonomía de unos 100 m |
-| Calorías | `m·g·μ·d / 4184` | Trabajo de rodadura real, no un número de adorno |
-
-La energía se calcula con `m = 20 kg`, `g = 9.81`, `μ = 0.05`: trabajo mecánico
-de rodar sobre chatarra compactada, convertido a kcal.
-
-## Estructura
-
-```
-main.py                 bucle de teclado y prueba headless
-simulador/fisica.py     geometría, colisiones, batería, energía, 8 rayos
-simulador/escenarios.py mapas con colocación de basura por rechazo
-simulador/entorno.py    Escena: episodio + vector de observación (17 valores)
-simulador/render.py     visor pygame
-```
-
-## Observación que entrega
-
-17 flotantes acotados, pensados para una red pequeña:
-
-```
-[cos θ, sin θ, batería, carga, cubos restantes,
- dx, dy, distancia a la basura más cercana,
- distancia al contenedor,
- 8 distancias de rayo normalizadas]
-```
-
-## Prueba rápida
-
-```powershell
-python main.py --sin-ventana --escenario patio --pasos 300
-```
-
-Devuelve batería, posición y choques. Sirve para comprobar que una modificación
-en la física no rompió nada, sin abrir ventana.
+| «No se reconoce python» | Falta Python o el `.venv` | Correr `INSTALAR.bat` |
+| Ventana en damero, sin robot | Ventana huérfana de una corrida anterior | Cerrar todo y relanzar el `.bat` |
+| Modo PPO no carga | Falta el `.zip` en `models\` | Ver la tabla de arriba |
+| Se mueve lentísimo | Hay un entrenamiento comiendo CPU | Cerrarlo antes de simular |
+| Frena lejos de los obstáculos | LiDAR mal configurado | Ver `rayTestBatch` arriba |

@@ -1,3 +1,9 @@
+# ─────────────────────────────────────────────────────────────
+# Proyecto WALL-E — qué no se versiona
+# Regla: el código y los modelos entrenados SÍ. Los artefactos
+# regenerables (entornos, cachés, checkpoints, logs) NO.
+# ─────────────────────────────────────────────────────────────
+
 # Python
 __pycache__/
 *.py[cod]
@@ -5,25 +11,63 @@ __pycache__/
 .venv/
 venv/
 env/
+build/
+dist/
 
-# Agente de IA: configuracion local y estado del usuario
-Agente de IA Wall-E/config.json
-Agente de IA Wall-E/datos/*
-!Agente de IA Wall-E/datos/emociones.json
+# Entornos virtuales de cualquiera de las tres carpetas
+Simulador Wall-E/.venv/
+Asistente IA Wall-E/.venv/
+
+# ── Simulador ────────────────────────────────────────────────
+# Historial de entrenamiento: 300 MB de checkpoints intermedios.
+# El modelo final (models/*.zip) sí se versiona.
+Simulador Wall-E/models/checkpoints*/
+Simulador Wall-E/tb_logs*/
+Simulador Wall-E/models/*.log
+Simulador Wall-E/*.log
+Simulador Wall-E/*.err
+Simulador Wall-E/reports/
+Simulador Wall-E/feedback_walle/
+Simulador Wall-E/deploy/
+Simulador Wall-E/_smoke_out/
+Simulador Wall-E/_train_headless.bat
+
+# Capturas y basura de depuración que se acumula en models/
+Simulador Wall-E/models/_*.png
+Simulador Wall-E/models/_*.py
+
+# ── Asistente IA ─────────────────────────────────────────────
+# Configuración local y estado del usuario, no del proyecto.
+Asistente IA Wall-E/config.json
+Asistente IA Wall-E/Modelo AI/config.json
+Asistente IA Wall-E/Modelo AI/memory.db
+Asistente IA Wall-E/Modelo AI/memory.db-wal
+Asistente IA Wall-E/Modelo AI/memory.db-shm
+Asistente IA Wall-E/Modelo AI/datos/*
+Asistente IA Wall-E/Pagina Web/cockpit/tmp_*.py
+
+# Dependencias de Node y build intermedio del frontend.
+# El build servido (cockpit/static/) SÍ se versiona: es lo que
+# corre el servidor y no hay que compilar nada para usarlo.
+Asistente IA Wall-E/Pagina Web/cockpit/ui/node_modules/
+Asistente IA Wall-E/Pagina Web/cockpit/ui/dist/
+
+# ── Cerebro ──────────────────────────────────────────────────
+# ip_robot.txt lo genera el .bat en cada PC.
+Cerebro Wall-E/ip_robot.txt
+Cerebro Wall-E/*.log
+
+# ── Común ────────────────────────────────────────────────────
 *.db
 *.db-wal
 *.db-shm
-
-# Interfaz: dependencias de Node y build intermedio
-Agente de IA Wall-E/ui/node_modules/
-Agente de IA Wall-E/ui/dist/
-
-# Artefactos de entrenamiento (el checkpoint si se sube, el CSV no)
-Cerebro Wall-E (Actividad Fisica + PPO) .py/modelo/entrenamiento.csv
 *.tmp
+*.log
+*.err
 
 # Editores y sistema
 .vscode/
 .idea/
 Thumbs.db
 desktop.ini
+.DS_Store

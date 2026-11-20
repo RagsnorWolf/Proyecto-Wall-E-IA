@@ -1,125 +1,165 @@
 # Proyecto WALL-E
 
-Tres piezas que funcionan juntas y también **por separado**. Cada carpeta se
-descarga, se instala y se ejecuta sola:
+Un robot WALL-E físico controlado desde una PC. La inteligencia vive en la PC;
+el hardware solo obedece.
 
-| Carpeta | Qué es | Qué resuelve |
+Este repositorio contiene las tres carpetas del proyecto. Cada una se puede
+descargar sola y funciona.
+
+```
+Cerebro Wall-E\          el robot físico: ESP32 + Arduino UNO + enlace + consola
+Simulador Wall-E\        el gemelo virtual: PyBullet, GUI y entrenamiento PPO
+Asistente IA Wall-E\     el agente conversacional: proyecto aparte
+```
+
+---
+
+## La arquitectura
+
+```
+   PC                        ESP32                    Arduino UNO
+   ────                      ─────                    ───────────
+   cerebro                    puente                   músculos
+   decide todo      WiFi      sin lógica      serie    sin lógica
+   ──────────────────────►    ──────────────────────►
+   UDP 4210                  <id>,<op>,<a>,<b>        motores + servos
+```
+
+| Pieza | Rol | Qué hace | Qué NO hace |
+|---|---|---|---|
+| **PC** | Cerebro | Percibe, decide, manda órdenes | No mueve motores |
+| **ESP32** | Puente | Recibe por WiFi, traduce a serie, devuelve el ACK | No decide |
+| **UNO** | Músculos | PWM de motores, ángulos de servo | No decide |
+
+El ACK solo es válido si lo generó el UNO después de ejecutar. El ESP32 no
+inventa respuestas.
+
+---
+
+## Cerebro Wall-E
+
+Todo lo necesario para mover el robot real.
+
+```
+README.md
+protocolo.md                    el contrato PC ↔ ESP32 ↔ UNO
+PARA AGUS - puesta en marcha.md runbook de 8 pasos
+Hablar con WALL-E.bat           consola interactiva
+arduino_uno\walle_motors\       sketch del UNO
+esp32\walle_bridge\             sketch del ESP32 + config.h
+cerebro\walle_link.py           cliente UDP
+cerebro\test_link.py            pruebas, con --loopback
+cerebro\consola.py              control manual por teclado
+cerebro\sim_link.py             adaptador para el simulador
+```
+
+Verificado con `test_link.py --loopback`: 8 OK, 0 fallos. Y con la consola
+end-to-end: 97 órdenes, 97 ACK, 0 reintentos, 0 timeouts.
+
+---
+
+## Simulador Wall-E
+
+El gemelo virtual. Sirve para ver el robot y para entrenar el cerebro.
+
+```
+INSTALAR.bat                  crea .venv e instala dependencias
+WALL-E Simulador Robot.bat    abre la GUI
+WALL-E Entrenar Cerebro.bat   entrena el PPO
+WALL-E Robot Real.bat         manda las órdenes al ESP32
+interactive_walle.py          GUI, chat y controlador
+walle_env_v3.py               entorno V5, observación de 58 números
+train_walle_v5.py             entrenamiento
+transplant_v4_to_v5.py        trasplante de pesos V4 → V5
+models\                       las políticas entrenadas
+material_0.png                textura del robot, 2048×2048
+walle_visual.obj              la malla
+```
+
+**Los tres modos:** manual (chat en castellano), PPO (autónomo) y robot real
+(por WiFi al ESP32).
+
+La observación de 58 números son 14 base + 36 rayos LiDAR frontales + 8 de
+resolución de atascos. Los primeros 50 son exactamente los del V4, por eso el
+trasplante de pesos funciona sin reentrenar de cero.
+
+### Trampas del entorno que ya costaron caro
+
+| Trampa | Consecuencia |
+|---|---|
+| `p.rayTestBatch` con argumentos por posición | Ignora `parentObjectUniqueId`; cada rayo pega contra el propio chasis y el robot frena en la nada. **Usar argumentos por nombre** |
+| `LIDAR_THREADS > 0` | Access violation en procesos hijos |
+| `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()` |
+| `rich` con stdout redirigido | Se bloquea |
+| `torch.set_num_threads` alto en inferencia | 1,5 s por paso |
+| `COV_ENABLE_RGB_AXES` en PyBullet 3.2.7 | No existe |
+
+---
+
+## Asistente IA Wall-E
+
+Proyecto aparte: un agente conversacional local, sin cuentas ni internet.
+
+```
+Iniciar WALL-E.bat     abre la cabina en el navegador
+INSTALAR.bat           dependencias de Python
+Modelo AI\             personalidad, memoria, voz, visión
+Pagina Web\cockpit\    servidor e interfaz
+```
+
+Necesita [Ollama](https://ollama.com) y `ollama pull qwen2.5:3b`. Hoy está
+pausado: primero el cerebro motor.
+
+---
+
+## Qué se versiona
+
+El código y los modelos entrenados **sí**. Los artefactos regenerables **no**:
+
+| Sí | No |
+|---|---|
+| `.py`, `.ino`, `.js`, `.jsx`, `.md`, `.bat` | `.venv\` (887 MB, no portable) |
+| `models\*.zip` (políticas finales) | `models\checkpoints\` (historial) |
+| Texturas y mallas (`.png`, `.obj`, `.glb`) | `__pycache__\`, `node_modules\` |
+| El build servido (`cockpit\static\`) | `*.log`, `*.db`, `reports\` |
+
+---
+
+## Puesta en marcha
+
+Cada carpeta tiene su `INSTALAR.bat` y su `README.md`. No hace falta leer nada
+de las otras dos.
+
+| Quiero… | Carpeta | Archivo |
 |---|---|---|
-| `Simulador Wall-E/` | Motor 2D con física realista | El mundo donde se prueba todo, sin hardware |
-| `Cerebro Wall-E (Actividad Fisica + PPO) .py/` | Aprendizaje por refuerzo (PPO escrito a mano) | La política que conduce: explora, recoge, entrega |
-| `Agente de IA Wall-E/` | Cabina web: WALL-E en 3D, chat con voz, memoria, cámara y control del robot | La cabeza que decide qué hacer y por qué |
+| Mover el robot real | `Cerebro Wall-E` | `Hablar con WALL-E.bat` |
+| Ver el robot en 3D | `Simulador Wall-E` | `WALL-E Simulador Robot.bat` |
+| Entrenar el cerebro | `Simulador Wall-E` | `WALL-E Entrenar Cerebro.bat` |
+| Conversar con WALL-E | `Asistente IA Wall-E` | `Iniciar WALL-E.bat` |
 
-Cada una se baja sola y funciona sola. El Cerebro ya trae `modelo/politica.json`
-entrenado, así que `iniciar.bat` muestra a WALL-E jugando sin esperar un
-entrenamiento; el Agente trae la interfaz compilada y el modelo 3D adentro.
+Cada una lleva además un `00-CONTEXTO.md` con el contexto completo del proyecto,
+para que quien la abra entienda dónde está parado.
 
-La cadena es simple: **el Simulador presta la física, el Cerebro aprende a moverse
-dentro de ella, y el Agente conversa, recuerda y maneja el robot.**
+---
 
-```
-Simulador Wall-E  ──física──▶  Cerebro PPO  ──política──▶  Robot
-   (mundo)                     (entrena)
+## Estado
 
-Agente de IA  ──habla──▶  Ollama (modelo local)  ──herramientas──▶  robot / PC
-   (cabina web)
-```
+| Pieza | Estado |
+|---|---|
+| Enlace PC ↔ ESP32 ↔ UNO | ✅ verificado con loopback |
+| Consola de control | ✅ 97 órdenes, 0 fallos |
+| Simulador, modo manual | ✅ 0,95 m de 1,00 · 43° de 45° |
+| Simulador, modo PPO | ✅ carga y decide (obs 58D) |
+| Entrenamiento | ✅ 4096 pasos, 104 fps |
+| GUI | ✅ 59 FPS, textura aplicada |
+| Robot autónomo real | ⏳ falta el sensor de distancia |
 
-## Instalación por carpeta
+**El bloqueo actual:** la política usa 36 rayos LiDAR que el robot físico no
+tiene. Solo un LiDAR giratorio permite reusar el modelo sin reentrenar; un
+HC-SR04 da un haz y obliga a reentrenar con otra observación.
 
-Cada carpeta trae su propio `instalar.bat` (Windows) e `instalar.sh` (Linux/macOS).
-Nada más que hacer: doble clic y el instalador crea el entorno, instala lo que
-falta y hace una prueba de humo.
-
-| Si querés… | Bajá solo | Después |
-|---|---|---|
-| Jugar con el simulador | `Simulador Wall-E/` | `instalar.bat` → `iniciar.bat` |
-| Entrenar el cerebro | `Cerebro Wall-E (Actividad Fisica + PPO) .py/` | `instalar.bat` → `entrenar.bat` → `iniciar.bat` |
-| Usar el asistente | `Agente de IA Wall-E/` | `instalar.bat` → `WALL-E Asistente IA.bat` |
-
-Requisito único: **Python 3.10 o superior**, con la casilla *"Add python.exe to
-PATH"* marcada al instalar. Para que el asistente piense hace falta además
-[Ollama](https://ollama.com/download) con el modelo creado por `build_model.py`.
-
-### Por qué funcionan solas
-
-Solo el Cerebro necesita algo de otra carpeta: la física del Simulador. La lleva
-copiada en `vendor/`, generada desde la fuente de verdad:
-
-```
-Cerebro/vendor/simulador    copia de Simulador Wall-E/simulador
-```
-
-El Agente no copia nada: su cerebro es propio (`brain/`) y trae la interfaz ya
-compilada, así que no necesita Node ni internet.
-
-Las copias se regeneran con un comando y la CI falla si quedan viejas:
-
-```powershell
-python sincronizar.py              # actualiza las copias
-python sincronizar.py --verificar  # solo compara (lo que corre la CI)
-```
-
-## Requisitos reales
-
-- Python 3.10+. Nada más obligatorio.
-- `pygame` solo para ver la ventana del simulador (lo instala `instalar.bat`).
-- `pyserial` solo para el robot real por USB.
-- `opencv-python` solo para la cámara y el seguimiento por color.
-- Ollama solo para que el chat piense; sin él la cabina abre igual.
-
-No hay numpy ni torch en el cerebro: el PPO está escrito en Python puro, con
-gradiente verificado por diferencias finitas. Corre en cualquier Python sin
-compilar nada.
-
-## Pruebas
-
-Cada carpeta trae su suite, sin dependencias externas ni red:
-
-```powershell
-cd "Cerebro Wall-E (Actividad Fisica + PPO) .py"; python -m unittest -v pruebas
-cd "..\Agente de IA Wall-E";                     python -m unittest -v pruebas_agente
-cd "..\Simulador Wall-E";                        python main.py --sin-ventana --pasos 200
-```
-
-La prueba importante del Cerebro compara el gradiente analítico del PPO con
-diferencias finitas: si una fórmula pierde el signo, truena antes de entrenar
-media hora para nada. La del Agente levanta el servidor real en un puerto libre
-y le habla por HTTP como lo haría el navegador.
-
-## Estructura
-
-```
-Proyecto-Wall-E-IA/
-├── sincronizar.py                        mantiene al día las copias vendorizadas
-├── Simulador Wall-E/                     física, escenarios, visor pygame
-│   ├── instalar.bat / iniciar.bat / instalar.sh
-│   └── simulador/                        fisica, escenarios, entorno, render
-├── Cerebro Wall-E (Actividad Fisica + PPO) .py/
-│   ├── instalar.bat / entrenar.bat / iniciar.bat / instalar.sh
-│   ├── cerebro/                          red, PPO, recompensa, entorno
-│   ├── vendor/simulador/                 copia generada
-│   ├── entrenar_ppo.py                   entrenamiento + CSV de la curva
-│   └── evaluar.py                        mirar la política jugando
-├── Agente de IA Wall-E/
-│   ├── instalar.bat / iniciar.bat / "WALL-E Asistente IA.bat"
-│   ├── server.py                         servidor local y todas las rutas /api
-│   ├── brain/                            agente, Ollama, herramientas, memoria
-│   ├── hardware/ vision/                 robot por USB y cámara
-│   ├── static/                           interfaz compilada (sin Node)
-│   └── ui/                               fuentes React para recompilarla
-└── .github/workflows/pruebas.yml         CI: suites, carpeta suelta y vendor
-```
-
-## Cómo se comparte
-
-El repositorio es público y no contiene claves ni datos personales:
-
-```powershell
-git clone https://github.com/RagsnorWolf/Proyecto-Wall-E-IA.git
-```
-
-`config.json`, `datos/` y los CSV de entrenamiento están en `.gitignore`.
+---
 
 ## Licencia
 
-MIT. Usalo, cambialo, compartilo.
+Ver `LICENSE`.

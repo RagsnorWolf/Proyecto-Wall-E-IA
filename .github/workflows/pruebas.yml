@@ -1,5 +1,9 @@
 name: pruebas
 
+# Lo que se verifica acá tiene que poder correr sin GPU, sin PyBullet y sin
+# descargar 2 GB de PyTorch. El simulador completo se prueba a mano; esto
+# atrapa lo que se rompe en silencio: sintaxis, enlaces y lanzadores.
+
 on:
   push:
     branches: [main]
@@ -7,7 +11,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  suites:
+  sintaxis:
+    name: Sintaxis Python (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,38 +27,19 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Copias vendorizadas al dia
-        run: python sincronizar.py --verificar
+      - name: Compilar las tres carpetas
+        run: |
+          python -m compileall -q "Cerebro Wall-E"
+          python -m compileall -q "Simulador Wall-E"
+          python -m compileall -q "Asistente IA Wall-E"
 
-      - name: Compilar todo
-        run: python -m compileall -q .
-
-      - name: Cerebro (gradiente + entorno)
-        working-directory: "Cerebro Wall-E (Actividad Fisica + PPO) .py"
-        run: python -m unittest -v pruebas
-
-      - name: Agente (cabina + API)
-        working-directory: "Agente de IA Wall-E"
-        run: python -m unittest -v pruebas_agente
-
-      - name: Simulador headless
-        working-directory: "Simulador Wall-E"
-        run: python main.py --sin-ventana --escenario patio --pasos 200
-
-      - name: Entrenamiento corto de humo
-        working-directory: "Cerebro Wall-E (Actividad Fisica + PPO) .py"
-        run: python entrenar_ppo.py --pasos 2048 --eval-episodios 1 --guardar modelo/humo.json --registro modelo/humo.csv
-
-  carpeta-suelta:
-    # La promesa del repo: cada carpeta se descarga SOLA y funciona.
-    # Se copia cada una a un directorio vacio, sin carpetas hermanas.
-    runs-on: ubuntu-latest
+  cerebro:
+    name: Cerebro — enlace y protocolo
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        carpeta:
-          - "Simulador Wall-E"
-          - "Cerebro Wall-E (Actividad Fisica + PPO) .py"
-          - "Agente de IA Wall-E"
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -62,29 +48,201 @@ jobs:
         with:
           python-version: "3.12"
 
+      # test_link.py es stdlib pura a propósito: el protocolo se puede probar
+      # sin hardware y sin dependencias. El --loopback levanta un puente falso.
+      - name: Pruebas del enlace en loopback
+        working-directory: "Cerebro Wall-E/cerebro"
+        run: python test_link.py --loopback
+
+      - name: El cliente UDP importa sin dependencias
+        working-directory: "Cerebro Wall-E/cerebro"
+        run: python -c "import walle_link; print('walle_link', walle_link.__name__)"
+
+  simulador:
+    name: Simulador — entorno y modelo
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # OBS_DIM no es un literal: es 14 + SENSOR_COUNT + OBS_EXTRAS. Se evalúa
+      # contra las constantes del módulo, sin importarlo (importar pide
+      # pybullet y 2 GB de torch, que no van en CI).
+      - name: El entorno declara la observación de 58
+        working-directory: "Simulador Wall-E"
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+          tree = ast.parse(pathlib.Path("walle_env_v3.py").read_text(encoding="utf-8"))
+          constantes = {}
+          for nodo in tree.body:
+              if isinstance(nodo, ast.Assign) and len(nodo.targets) == 1:
+                  t = nodo.targets[0]
+                  if isinstance(t, ast.Name):
+                      try:
+                          constantes[t.id] = ast.literal_eval(nodo.value)
+                      except Exception:
+                          constantes.setdefault(t.id, ast.unparse(nodo.value))
+          print("constantes:", {k: v for k, v in constantes.items() if k in
+                ("OBS_DIM", "OBS_EXTRAS", "SENSOR_COUNT", "LIDAR_RAYS")})
+          expr = constantes.get("OBS_DIM")
+          if expr is None:
+              sys.exit("no se encontro OBS_DIM")
+          # Sólo aritmética sobre nombres conocidos: nada de exec arbitrario.
+          valor = eval(str(expr), {"__builtins__": {}}, dict(constantes))
+          if valor != 58:
+              sys.exit(f"OBS_DIM deberia ser 58, evalua a {valor}")
+          print(f"OBS_DIM = {valor} OK")
+          PY
+
+      - name: Las tres políticas están en el repo
+        working-directory: "Simulador Wall-E"
+        run: |
+          for f in walle_ppo_model_v5_recovery.zip walle_ppo_model_v4_lidar.zip walle_ppo_model_v3_explorer.zip; do
+            test -s "models/$f" || { echo "FALTA models/$f"; exit 1; }
+            echo "OK models/$f ($(du -h "models/$f" | cut -f1))"
+          done
+
+      - name: La textura y la malla están en el repo
+        working-directory: "Simulador Wall-E"
+        run: |
+          for f in material_0.png material.mtl walle_visual.obj; do
+            test -s "$f" || { echo "FALTA $f"; exit 1; }
+            echo "OK $f"
+          done
+
+  agente:
+    name: Agente — cabina y cliente de Ollama
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # El cliente de Ollama es stdlib pura: se puede importar sin servidor.
+      - name: El cliente de Ollama importa
+        working-directory: "Asistente IA Wall-E/Modelo AI"
+        run: python -c "from brain.llm import Ollama; print('Ollama OK')"
+
+      - name: La personalidad existe y no está vacía
+        working-directory: "Asistente IA Wall-E/Modelo AI"
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          p = pathlib.Path("prompts/system.md")
+          if not p.exists():
+              sys.exit("FALTA prompts/system.md")
+          texto = p.read_text(encoding="utf-8")
+          if len(texto) < 200:
+              sys.exit(f"system.md parece vacio ({len(texto)} caracteres)")
+          print(f"system.md OK ({len(texto)} caracteres)")
+          PY
+
+      - name: El build servido de la cabina está en el repo
+        run: |
+          test -s "Asistente IA Wall-E/Pagina Web/cockpit/static/index.html" || { echo "FALTA el build"; exit 1; }
+          echo "build OK"
+
+  lanzadores:
+    name: Lanzadores .bat sanos
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Un BOM o un acento en un .bat rompe cmd de formas raras de diagnosticar.
+      # ASCII puro, sin BOM, sin rutas absolutas clavadas.
+      - name: Verificar los .bat
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          fallos = []
+          bats = list(pathlib.Path(".").rglob("*.bat"))
+          if not bats:
+              sys.exit("no se encontro ningun .bat")
+          for p in bats:
+              datos = p.read_bytes()
+              if datos.startswith(b"\xef\xbb\xbf"):
+                  fallos.append(f"{p}: tiene BOM")
+              altos = [b for b in datos if b > 127]
+              if altos:
+                  fallos.append(f"{p}: {len(altos)} bytes no ASCII")
+              texto = datos.decode("utf-8", "replace")
+              for mala in ("E:\\", "C:\\Users\\"):
+                  if mala in texto:
+                      fallos.append(f"{p}: ruta absoluta clavada ({mala})")
+              if p.name not in ("INSTALAR.bat",) and "%~dp0" not in texto and "cd /d" not in texto:
+                  fallos.append(f"{p}: no resuelve su ruta con %~dp0")
+              print(f"OK {p}")
+          if fallos:
+              print("\nFALLOS:")
+              for f in fallos:
+                  print(" -", f)
+              sys.exit(1)
+          print(f"\n{len(bats)} lanzadores sanos")
+          PY
+
+  carpeta-suelta:
+    name: Cada carpeta se sostiene sola
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        carpeta:
+          - "Cerebro Wall-E"
+          - "Simulador Wall-E"
+          - "Asistente IA Wall-E"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # La promesa del repo: cada carpeta se copia a un directorio vacío, sin
+      # carpetas hermanas, y sigue funcionando.
       - name: Copiar solo esta carpeta
         run: |
           mkdir -p "$RUNNER_TEMP/solo"
           cp -r "${{ matrix.carpeta }}" "$RUNNER_TEMP/solo/proyecto"
           echo "SOLO=$RUNNER_TEMP/solo/proyecto" >> "$GITHUB_ENV"
 
+      - name: Tiene su contexto y su README
+        working-directory: ${{ env.SOLO }}
+        run: |
+          test -s README.md || { echo "FALTA README.md"; exit 1; }
+          test -s 00-CONTEXTO.md || { echo "FALTA 00-CONTEXTO.md"; exit 1; }
+          echo "documentacion OK"
+
+      - name: Cerebro suelto
+        if: matrix.carpeta == 'Cerebro Wall-E'
+        working-directory: ${{ env.SOLO }}/cerebro
+        run: python test_link.py --loopback
+
       - name: Simulador suelto
         if: matrix.carpeta == 'Simulador Wall-E'
         working-directory: ${{ env.SOLO }}
         run: |
-          python -m pip install --quiet pygame
-          python main.py --sin-ventana --pasos 150
-
-      - name: Cerebro suelto
-        if: matrix.carpeta == 'Cerebro Wall-E (Actividad Fisica + PPO) .py'
-        working-directory: ${{ env.SOLO }}
-        run: |
-          python -m unittest -v pruebas
-          python entrenar_ppo.py --pasos 1024 --eval-episodios 1 --guardar modelo/humo.json --registro modelo/humo.csv
+          test -s requirements.txt
+          test -s walle_env_v3.py
+          test -s interactive_walle.py
+          test -s "models/walle_ppo_model_v5_recovery.zip"
+          python -m compileall -q .
+          echo "simulador suelto OK"
 
       - name: Agente suelto
-        if: matrix.carpeta == 'Agente de IA Wall-E'
-        working-directory: ${{ env.SOLO }}
+        if: matrix.carpeta == 'Asistente IA Wall-E'
+        working-directory: ${{ env.SOLO }}/Modelo AI
         run: |
-          python -m unittest -v pruebas_agente
-          python -c "import server; print('cabina', server.VERSION)"
+          python -c "from brain.llm import Ollama; print('cabina OK')"
