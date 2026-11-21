@@ -247,6 +247,18 @@ def main() -> None:
     model.save(out_path)
     print(f"[TRAIN_V5] Modelo guardado: {out_path}")
 
+    # Marca de terminación: el guardián (continuar_entrenamiento.ps1) mira
+    # este archivo antes de relanzar. Sin él, un entrenamiento que terminó
+    # bien se volvería a arrancar cada cinco minutos para siempre.
+    marca = os.path.join(args.output_dir, "ENTRENAMIENTO_COMPLETO.txt")
+    with open(marca, "w", encoding="utf-8") as fh:
+        fh.write(
+            f"terminado: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"modelo: {out_path}\n"
+            f"duracion_s: {dur:.1f}\n"
+        )
+    print(f"[TRAIN_V5] Marca de terminación: {marca}")
+
     env.close()
 
 
