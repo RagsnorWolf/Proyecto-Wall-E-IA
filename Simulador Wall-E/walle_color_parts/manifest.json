@@ -1,158 +1,258 @@
 {
-  "version": 3,
-  "clusters": 16,
+  "version": 4,
+  "body_clusters": 20,
+  "tread_clusters": 4,
+  "tread_side_y": 0.17,
+  "tread_top_z": 0.1,
+  "tread_floor_z": -0.1,
   "source_obj": {
-    "mtime_ns": 1794147412560664600,
-    "size": 3894997
+    "mtime_ns": 1795063131383197400,
+    "size": 4014231
   },
   "source_png": {
-    "mtime_ns": 1794165626409962300,
+    "mtime_ns": 1795063131254033100,
     "size": 4449121
   },
   "parts": [
     {
-      "file": "part_00.obj",
+      "file": "part_body_00.obj",
+      "family": "body",
       "color": [
-        0.479691,
-        0.258037,
-        0.074496
+        0.708694,
+        0.514761,
+        0.323454
       ],
-      "faces": 1921
+      "faces": 1126
     },
     {
-      "file": "part_01.obj",
+      "file": "part_body_01.obj",
+      "family": "body",
       "color": [
-        0.962723,
-        0.522368,
-        0.0
+        0.85918,
+        0.575958,
+        0.199917
       ],
-      "faces": 1900
+      "faces": 1097
     },
     {
-      "file": "part_02.obj",
+      "file": "part_body_02.obj",
+      "family": "body",
       "color": [
-        0.112653,
-        0.109977,
-        0.108223
+        0.753513,
+        0.512011,
+        0.211641
       ],
-      "faces": 724
+      "faces": 1208
     },
     {
-      "file": "part_03.obj",
+      "file": "part_body_03.obj",
+      "family": "body",
       "color": [
-        1.0,
-        0.589079,
-        0.0
+        0.930514,
+        0.625086,
+        0.207608
       ],
-      "faces": 3285
+      "faces": 1455
     },
     {
-      "file": "part_04.obj",
+      "file": "part_body_04.obj",
+      "family": "body",
       "color": [
-        0.487172,
-        0.468946,
-        0.47503
+        0.055,
+        0.055,
+        0.065
       ],
-      "faces": 3118
+      "faces": 182
     },
     {
-      "file": "part_05.obj",
+      "file": "part_body_05.obj",
+      "family": "body",
       "color": [
-        0.398568,
-        0.193219,
-        0.095842
+        0.692737,
+        0.48558,
+        0.260831
       ],
-      "faces": 2224
+      "faces": 1823
     },
     {
-      "file": "part_06.obj",
+      "file": "part_body_06.obj",
+      "family": "body",
       "color": [
-        0.279729,
-        0.169019,
-        0.055165
+        0.511869,
+        0.521869,
+        0.541869
       ],
-      "faces": 417
+      "faces": 491
     },
     {
-      "file": "part_07.obj",
+      "file": "part_body_07.obj",
+      "family": "body",
       "color": [
-        0.308327,
-        0.174336,
-        0.126183
+        0.404827,
+        0.414827,
+        0.434827
       ],
-      "faces": 14287
+      "faces": 1030
     },
     {
-      "file": "part_08.obj",
+      "file": "part_body_08.obj",
+      "family": "body",
       "color": [
-        0.355668,
-        0.25435,
-        0.229104
+        0.870175,
+        0.606753,
+        0.269706
       ],
-      "faces": 1982
+      "faces": 131
     },
     {
-      "file": "part_09.obj",
+      "file": "part_body_09.obj",
+      "family": "body",
       "color": [
-        0.570558,
-        0.255372,
-        0.061975
+        0.648437,
+        0.434789,
+        0.183862
       ],
-      "faces": 1417
+      "faces": 98
     },
     {
-      "file": "part_10.obj",
+      "file": "part_body_10.obj",
+      "family": "body",
       "color": [
-        0.65523,
-        0.34366,
-        0.041121
+        0.82109,
+        0.552344,
+        0.20062
       ],
-      "faces": 1958
+      "faces": 1115
     },
     {
-      "file": "part_11.obj",
+      "file": "part_body_11.obj",
+      "family": "body",
       "color": [
-        0.810583,
-        0.813895,
-        0.812505
+        0.788098,
+        0.533013,
+        0.207992
       ],
-      "faces": 581
+      "faces": 997
     },
     {
-      "file": "part_12.obj",
+      "file": "part_body_12.obj",
+      "family": "body",
       "color": [
-        0.877165,
-        0.467784,
-        0.005993
+        0.8018,
+        0.476515,
+        0.186645
       ],
-      "faces": 2067
+      "faces": 218
     },
     {
-      "file": "part_13.obj",
+      "file": "part_body_13.obj",
+      "family": "body",
       "color": [
-        0.428948,
-        0.349122,
-        0.34541
+        0.736252,
+        0.458982,
+        0.195152
       ],
-      "faces": 1856
+      "faces": 298
     },
     {
-      "file": "part_14.obj",
+      "file": "part_body_14.obj",
+      "family": "body",
       "color": [
-        0.620637,
-        0.606875,
-        0.602059
+        0.605505,
+        0.615505,
+        0.635505
       ],
-      "faces": 781
+      "faces": 509
     },
     {
-      "file": "part_15.obj",
+      "file": "part_body_15.obj",
+      "family": "body",
       "color": [
-        0.773021,
-        0.393398,
-        0.022878
+        0.720193,
+        0.492038,
+        0.220578
       ],
-      "faces": 1694
+      "faces": 1003
+    },
+    {
+      "file": "part_body_16.obj",
+      "family": "body",
+      "color": [
+        0.438999,
+        0.448999,
+        0.468999
+      ],
+      "faces": 1920
+    },
+    {
+      "file": "part_body_17.obj",
+      "family": "body",
+      "color": [
+        0.681012,
+        0.470237,
+        0.244723
+      ],
+      "faces": 9730
+    },
+    {
+      "file": "part_body_18.obj",
+      "family": "body",
+      "color": [
+        0.896963,
+        0.601982,
+        0.202896
+      ],
+      "faces": 1220
+    },
+    {
+      "file": "part_body_19.obj",
+      "family": "body",
+      "color": [
+        0.962853,
+        0.646903,
+        0.20917
+      ],
+      "faces": 3184
+    },
+    {
+      "file": "part_tread_00.obj",
+      "family": "tread",
+      "color": [
+        0.153883,
+        0.153883,
+        0.158383
+      ],
+      "faces": 2318
+    },
+    {
+      "file": "part_tread_01.obj",
+      "family": "tread",
+      "color": [
+        0.175972,
+        0.175972,
+        0.180472
+      ],
+      "faces": 1683
+    },
+    {
+      "file": "part_tread_02.obj",
+      "family": "tread",
+      "color": [
+        0.133479,
+        0.133479,
+        0.137979
+      ],
+      "faces": 5472
+    },
+    {
+      "file": "part_tread_03.obj",
+      "family": "tread",
+      "color": [
+        0.19212,
+        0.19212,
+        0.19662
+      ],
+      "faces": 1904
     }
   ]
 }

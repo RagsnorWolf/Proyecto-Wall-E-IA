@@ -71,6 +71,20 @@ try:
 except Exception:  # pragma: no cover - V3 opcional
     WallEEnvV3 = None  # type: ignore
 
+from walle_look import (
+    BORDER_RGBA,
+    GROUND_RGBA,
+    GROUND_SPECULAR,
+    GRID_MAJOR_RGB,
+    GRID_MINOR_RGB,
+    SKY_RGB,
+    WALL_RGBA,
+    WALL_SPECULAR,
+    solid_color,
+    solid_specular,
+)
+from walle_piezas import ensure_colored_parts as _piezas_ensure
+
 # --------------------------------------------------------------------------- #
 # Rutas y constantes
 # --------------------------------------------------------------------------- #
@@ -114,16 +128,28 @@ LIDAR_CONE_HIDE_M = 0.98         # rayos casi sin impacto no se dibujan
 # El abanico se dibuja a ras de suelo (a los pies de WALL-E): asi se ve
 # exactamente donde esta chocando y que hueco tiene para escapar.
 LIDAR_FAN_HEIGHT = 0.03
+# Gradiente de distancia. El viewport dice lo mismo que la observacion: el
+# ambar caliente es "pegado", el azul acero es "libre". Se interpola por rayo.
+LIDAR_NEAR_COLOR = [1.00, 0.34, 0.14]    # rojo-ambar: a centimetros
+LIDAR_FAR_COLOR = [0.24, 0.50, 0.86]     # azul acero: sin obstaculo cerca
+LIDAR_CONE_NEAR = [1.00, 0.58, 0.10]     # el cono de decision, mas calido
+LIDAR_CONE_FAR = [0.52, 0.70, 0.95]
+# Exponente del gradiente. <1 empuja el cambio hacia el fondo (mas superficie
+# azul y solo lo realmente cercano se pinta caliente); 1.0 seria lineal.
+LIDAR_GRADIENT_POWER = 0.65
 CONTACT_MARKER_COLOR = [0.95, 0.42, 0.18]   # naranja de impacto
 CONTACT_MARKER_WIDTH = 2.6
-# Textura real del OBJ en OpenGL3. Si se pone False, se usan las 16 piezas
-# de color generadas desde la textura (fallback para OpenGL2).
-WALLE_USE_TEXTURE = True
-SKY_COLOR = (0.14, 0.14, 0.16)      # fondo de estudio, gris muy oscuro
-GROUND_COLOR = (0.26, 0.26, 0.28, 1.0)   # suelo grafito mate
-WALL_COLOR = (0.64, 0.64, 0.67, 1.0)     # paredes gris claro mate
-GRID_COLOR_MINOR = (0.30, 0.30, 0.33)
-GRID_COLOR_MAJOR = (0.46, 0.46, 0.50)
+# Textura real del OBJ en OpenGL3. En OpenGL2 el MTL se ignora y el robot
+# sale gris plano, asi que por defecto se usan las piezas de color solidas
+# generadas por walle_piezas.py a partir de la misma textura.
+WALLE_USE_TEXTURE = False
+# Materiales del estudio: viven en walle_look.py junto con la paleta del
+# personaje, para que la GUI y las capturas de verificacion coincidan.
+SKY_COLOR = SKY_RGB                  # fondo de estudio, gris muy oscuro
+GROUND_COLOR = GROUND_RGBA           # suelo grafito mate
+WALL_COLOR = WALL_RGBA               # paredes grafito
+GRID_COLOR_MINOR = GRID_MINOR_RGB
+GRID_COLOR_MAJOR = GRID_MAJOR_RGB
 
 # Texto 3D flotante sobre el robot (telemetria). Apagado por defecto: el
 # viewport queda limpio, como en Isaac Sim. La telemetria sigue en la GUI.
@@ -236,8 +262,6 @@ AVOID_OFFSET_DECAY = 0.004   # retorno a la línea original (m por tick)
 AVOID_LOOKAHEAD_M = 1.20     # mira al frente para no cortar la esquina
 AVOID_COOLDOWN_S = 1.20      # mínimo entre desvíos (da tiempo a que actúe)
 
-COLOR_PART_VERSION = 3
-COLOR_PART_CLUSTERS = 16
 
 CSV_FIELDS = [
     "fecha",
@@ -289,6 +313,18 @@ def wrap_angle(angle: float) -> float:
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def lidar_gradient(
+    near: list[float], far: list[float], ratio: float
+) -> list[float]:
+    """Color intermedio entre `near` y `far` segun `ratio` en [0, 1]."""
+    t = clamp(ratio, 0.0, 1.0)
+    return [
+        near[0] + (far[0] - near[0]) * t,
+        near[1] + (far[1] - near[1]) * t,
+        near[2] + (far[2] - near[2]) * t,
+    ]
 
 
 def slew_toward(current: float, target: float, max_delta: float) -> float:
@@ -2862,195 +2898,20 @@ def verify_asset_files() -> None:
         pass
 
 
-def _file_signature(path: Path) -> dict[str, int]:
-    stat = path.stat()
-    return {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
-
-
 def ensure_colored_parts() -> list[tuple[str, tuple[float, float, float], int]]:
-    """Convierte la textura UV en 16 piezas OBJ de colores sólidos.
+    """Piezas de color de WALL-E, generadas desde la textura.
 
-    OpenGL2 (el renderer estable de esta PC) ignora el color de las texturas.
-    Para conservar el aspecto del WALL-E azul, se muestrea material_0.png por
-    cada cara usando sus coordenadas UV y se agrupan las caras en 16 colores.
-    Las piezas se cachean en walle_color_parts/ para no regenerarlas siempre.
+    La generacion vive en walle_piezas.py: parte la malla por familia
+    geometrica (cuerpo / oruga), agrupa cada familia por color de textura y
+    mapea el resultado a la paleta del personaje de walle_look.py.
+
+    Aca solo se resuelven las rutas del simulador y se delega.
     """
-    if not VISUAL_OBJ.exists() or not TEXTURE_PNG.exists():
-        return []
-
-    try:
-        import trimesh
-        from PIL import Image
-    except ImportError as exc:
-        print(
-            "[WALL-E] No se pudieron generar las piezas de color "
-            f"({exc}). Se usará el proxy visual simple.",
-            flush=True,
-        )
-        return []
-
-    COLOR_PARTS_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_path = COLOR_PARTS_DIR / "manifest.json"
-    source_obj = _file_signature(VISUAL_OBJ)
-    source_png = _file_signature(TEXTURE_PNG)
-
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            valid = (
-                manifest.get("version") == COLOR_PART_VERSION
-                and manifest.get("clusters") == COLOR_PART_CLUSTERS
-                and manifest.get("source_obj") == source_obj
-                and manifest.get("source_png") == source_png
-            )
-            if valid:
-                parts: list[tuple[str, tuple[float, float, float], int]] = []
-                for item in manifest.get("parts", []):
-                    part_path = COLOR_PARTS_DIR / item["file"]
-                    if not part_path.exists():
-                        valid = False
-                        break
-                    parts.append(
-                        (
-                            str(part_path),
-                            tuple(float(c) for c in item["color"]),
-                            int(item.get("faces", 0)),
-                        )
-                    )
-                if valid and parts:
-                    print(
-                        f"[WALL-E] Piezas de color en caché: {len(parts)}.",
-                        flush=True,
-                    )
-                    return parts
-        except Exception:
-            pass
-
-    try:
-        mesh = trimesh.load(str(VISUAL_OBJ), force="mesh")
-        image = Image.open(TEXTURE_PNG).convert("RGB")
-        uv = np.asarray(mesh.visual.uv, dtype=np.float64)
-        faces = np.asarray(mesh.faces, dtype=np.int64)
-        vertices = np.asarray(mesh.vertices, dtype=np.float64)
-
-        face_uv = uv[faces].mean(axis=1)
-        u = np.mod(face_uv[:, 0], 1.0)
-        v = np.mod(face_uv[:, 1], 1.0)
-        xs = np.clip(
-            (u * (image.width - 1)).astype(np.int64), 0, image.width - 1
-        )
-        ys = np.clip(
-            ((1.0 - v) * (image.height - 1)).astype(np.int64),
-            0,
-            image.height - 1,
-        )
-        colors = (
-            np.asarray(image, dtype=np.float32)[ys, xs] / 255.0
-        )
-
-        k = COLOR_PART_CLUSTERS
-        rng = np.random.default_rng(0)
-        centers = colors[rng.choice(len(colors), k, replace=False)].copy()
-        labels = np.zeros(len(colors), dtype=np.int64)
-        for _ in range(30):
-            distances = (
-                (colors[:, None, :] - centers[None, :, :]) ** 2
-            ).sum(axis=2)
-            labels = distances.argmin(axis=1)
-            new_centers = centers.copy()
-            for index in range(k):
-                mask = labels == index
-                if mask.any():
-                    new_centers[index] = colors[mask].mean(axis=0)
-            if np.allclose(new_centers, centers, atol=1e-5):
-                centers = new_centers
-                break
-            centers = new_centers
-
-        palette: list[tuple[float, float, float]] = []
-        for color in centers:
-            h, s, value = colorsys.rgb_to_hsv(*color)
-            if s > 0.10 and value > 0.20:
-                s = min(1.0, s * 1.25 + 0.06)
-                value = min(1.0, value * 1.06)
-            palette.append(colorsys.hsv_to_rgb(h, s, value))
-
-        distances = (
-            (colors[:, None, :] - centers[None, :, :]) ** 2
-        ).sum(axis=2)
-        labels = distances.argmin(axis=1)
-
-        new_parts: list[dict[str, Any]] = []
-        written_names: set[str] = set()
-        for index in range(k):
-            mask = labels == index
-            if not mask.any():
-                continue
-            sub_faces = faces[mask]
-            used = np.unique(sub_faces)
-            remap = -np.ones(len(vertices), dtype=np.int64)
-            remap[used] = np.arange(len(used))
-            part_vertices = vertices[used]
-            part_faces = remap[sub_faces]
-            part_name = f"part_{index:02d}.obj"
-            part_path = COLOR_PARTS_DIR / part_name
-            with part_path.open("w", encoding="utf-8") as fh:
-                for vtx in part_vertices:
-                    fh.write(
-                        f"v {vtx[0]:.6f} {vtx[1]:.6f} {vtx[2]:.6f}\n"
-                    )
-                for face in part_faces:
-                    fh.write(
-                        f"f {face[0] + 1} {face[1] + 1} {face[2] + 1}\n"
-                    )
-            written_names.add(part_name)
-            new_parts.append(
-                {
-                    "file": part_name,
-                    "color": [round(float(c), 6) for c in palette[index]],
-                    "faces": int(mask.sum()),
-                }
-            )
-
-        for stale in COLOR_PARTS_DIR.glob("part_*.obj"):
-            if stale.name not in written_names:
-                try:
-                    stale.unlink()
-                except OSError:
-                    pass
-
-        manifest = {
-            "version": COLOR_PART_VERSION,
-            "clusters": COLOR_PART_CLUSTERS,
-            "source_obj": source_obj,
-            "source_png": source_png,
-            "parts": new_parts,
-        }
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        result = [
-            (
-                str(COLOR_PARTS_DIR / item["file"]),
-                tuple(float(c) for c in item["color"]),
-                int(item["faces"]),
-            )
-            for item in new_parts
-        ]
-        print(
-            f"[WALL-E] Modelo de color generado desde la textura: "
-            f"{len(result)} piezas, {sum(p[2] for p in result)} caras.",
-            flush=True,
-        )
-        return result
-    except Exception as exc:  # noqa: BLE001
-        print(
-            f"[WALL-E] No pude generar el modelo de color ({exc}). "
-            "Se usará el proxy visual simple.",
-            flush=True,
-        )
-        return []
+    return _piezas_ensure(
+        VISUAL_OBJ,
+        TEXTURE_PNG,
+        COLOR_PARTS_DIR,
+    )
 
 
 def build_connect_options(gl3: bool = False) -> str:
@@ -3069,10 +2930,14 @@ def build_connect_options(gl3: bool = False) -> str:
 
 
 def build_scene(env: WallEEnv) -> None:
-    """Estudio minimalista: suelo grafito, cuadricula sutil y paredes mate.
+    """Estudio minimalista: suelo grafito, cuadricula sutil y solidos mate.
 
     Estetica tipo Isaac Sim / MuJoCo: fondo oscuro, geometria neutra y sin
     ejes ni carteles que ensucien el viewport.
+
+    Los colores y el brillo salen de `walle_look.py`, el mismo modulo que usan
+    las capturas de `tools_vista_previa.py`: lo que se ve en la GUI es lo que
+    se ve en el PNG de verificacion, sin dos paletas que se desincronizan.
     """
     arena = int(env.arena_half_size)
 
@@ -3081,11 +2946,10 @@ def build_scene(env: WallEEnv) -> None:
     # se resuelve con getattr y se ignora si no esta disponible.
     debug_flags = [
         (getattr(p, "COV_ENABLE_RGB_AXES", None), 0),
-        # Las sombras de esta build arrastran su propio panel de depuración en
+        # Las sombras de esta build arrastran su propio panel de depuracion en
         # los bordes de la ventana: se dejan apagadas para conservar el
-        # viewport limpio, que es la prioridad estética.
+        # viewport limpio, que es la prioridad estetica.
         (p.COV_ENABLE_SHADOWS, 0),
-        (p.COV_ENABLE_GUI, 0),
         (p.COV_ENABLE_GUI, 0),
     ]
     for flag, value in debug_flags:
@@ -3097,7 +2961,7 @@ def build_scene(env: WallEEnv) -> None:
             pass
 
     # El plano original de pybullet_data tiene una textura checker que en
-    # OpenGL2 se ve gris. Lo reemplazamos por una caja visual de estudio y un
+    # OpenGL2 se ve gris. Se reemplaza por una caja visual de estudio sobre un
     # plano de colision infinito en el mismo lugar.
     try:
         p.removeBody(env.plane)
@@ -3109,7 +2973,8 @@ def build_scene(env: WallEEnv) -> None:
         # El suelo visual cubre solo la arena: mas alla de las paredes el
         # fondo oscuro continua y no aparece un plano infinito iluminado.
         halfExtents=[float(arena), float(arena), 0.01],
-        rgbaColor=list(GROUND_COLOR),
+        rgbaColor=list(GROUND_RGBA),
+        specularColor=list(GROUND_SPECULAR),
         visualFramePosition=[0.0, 0.0, -0.01],
     )
     env.plane = p.createMultiBody(
@@ -3120,11 +2985,12 @@ def build_scene(env: WallEEnv) -> None:
     )
     p.changeDynamics(env.plane, -1, lateralFriction=1.0)
 
-    # Cuadricula de 1 m; cada 5 m una linea algo mas marcada.
+    # Cuadricula de 1 m; cada 5 m una linea algo mas marcada. Se dibuja a
+    # 6 mm del piso para que no compita con el abanico LiDAR, que va a 3 cm.
     for index in range(-arena, arena + 1):
         major = index % 5 == 0
         color = GRID_COLOR_MAJOR if major else GRID_COLOR_MINOR
-        width = 1.4 if major else 1.0
+        width = 1.3 if major else 0.9
         p.addUserDebugLine(
             [float(index), -float(arena), 0.006],
             [float(index), float(arena), 0.006],
@@ -3138,31 +3004,60 @@ def build_scene(env: WallEEnv) -> None:
             lineWidth=width,
         )
 
-    # Paleta neutra para todo lo que no es el robot: blanco mate, gris medio
-    # y grafito. Las zonas de friccion se excluyen (quedan solo fisicas).
-    neutral = [
-        (0.88, 0.88, 0.89, 1.0),
-        (0.66, 0.66, 0.69, 1.0),
-        (0.42, 0.42, 0.45, 1.0),
-    ]
+    # Borde de la arena: cuatro franjas finas que marcan donde termina el
+    # piso. Solo visuales, sin colision: no cambian la fisica ni el escaneo.
+    borde = 0.05
+    for pos, half in [
+        ([arena, 0.0, 0.004], [borde, float(arena), 0.004]),
+        ([-arena, 0.0, 0.004], [borde, float(arena), 0.004]),
+        ([0.0, arena, 0.004], [float(arena), borde, 0.004]),
+        ([0.0, -arena, 0.004], [float(arena), borde, 0.004]),
+    ]:
+        try:
+            visual = p.createVisualShape(
+                p.GEOM_BOX,
+                halfExtents=half,
+                rgbaColor=list(BORDER_RGBA),
+                specularColor=[0.05, 0.05, 0.06],
+            )
+            p.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=-1,
+                baseVisualShapeIndex=visual,
+                basePosition=pos,
+            )
+        except Exception:
+            pass
+
+    # Solidos: color estable por id de cuerpo. El mismo bloque conserva su
+    # tono entre arranques, asi el jugador reconoce la escena de memoria.
+    # Las zonas de friccion se excluyen: son solo fisica y su losa ya esta
+    # pintada del color del suelo.
     skip = {int(env.robot), int(env.plane)}
     skip.update(int(b) for b in getattr(env, "friction_zone_ids", []))
-    palette_index = 0
     for body in range(p.getNumBodies()):
         if body in skip:
             continue
         try:
             p.changeVisualShape(
-                body, -1, rgbaColor=list(neutral[palette_index % 3])
+                body,
+                -1,
+                rgbaColor=list(solid_color(body)),
+                specularColor=list(solid_specular(body)),
             )
-            palette_index += 1
         except Exception:
             pass
 
-    # Paredes perimetrales en gris claro mate (nada de cian translucido).
+    # Paredes perimetrales: grafito, mas oscuras que los solidos para que el
+    # limite de la arena se lea como fondo y no como obstaculo.
     for wall_id in getattr(env, "wall_ids", []):
         try:
-            p.changeVisualShape(wall_id, -1, rgbaColor=list(WALL_COLOR))
+            p.changeVisualShape(
+                wall_id,
+                -1,
+                rgbaColor=list(WALL_RGBA),
+                specularColor=list(WALL_SPECULAR),
+            )
         except Exception:
             pass
 
@@ -3170,10 +3065,10 @@ def build_scene(env: WallEEnv) -> None:
 class WalleVisual:
     """Cuerpo visual de WALL-E que sigue al proxy físico.
 
-    Con `textured=True` se carga el OBJ original con su MTL/PNG: en OpenGL3
-    PyBullet aplica la textura real (antes en OpenGL2 se veía en grises).
-    Con `textured=False` se usan las 16 piezas de color derivadas de la
-    textura, que es el fallback barato para OpenGL2.
+    Con `textured=True` se carga el OBJ original con su MTL/PNG: solo sirve
+    en OpenGL3, el unico renderer que respeta la textura del material.
+    Con `textured=False` se usan las piezas de color de `walle_piezas.py`,
+    ya mapeadas a la paleta del personaje, que funcionan en OpenGL2.
     """
 
     def __init__(
@@ -3204,13 +3099,20 @@ class WalleVisual:
                 )
             )
         else:
+            # Brillo de chapa pintada: el cuerpo rebota la luz, las orugas
+            # (que llegan casi negras) no. Se decide por el brillo del color.
             for path, color, _faces in self.parts:
+                luminance = (
+                    0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
+                )
+                sheen = 0.05 + 0.20 * min(1.0, luminance / 0.6)
                 visual_ids.append(
                     p.createVisualShape(
                         p.GEOM_MESH,
                         fileName=path,
                         meshScale=[1.0, 1.0, 1.0],
                         rgbaColor=[color[0], color[1], color[2], 1.0],
+                        specularColor=[sheen, sheen * 0.97, sheen * 0.90],
                     )
                 )
         count = len(visual_ids)
@@ -3309,17 +3211,20 @@ class WalleHud:
         self._cone_key = None
 
     def _update_lidar_fan(self, pos, yaw) -> None:
-        """Abanico LiDAR: rayos finos y densos hasta el punto de impacto real.
+        """Abanico de 72 rayos: del paragolpes al punto de impacto real.
 
-        Cada rayo con impacto va desde el centro de WALL-E hasta el punto que
-        detecto el escaneo. Los rayos sin impacto se colapsan en un punto (no
-        se dibujan), asi que el abanico no forma un circulo en el vacio: se
-        apoya en paredes y obstaculos. Solo se pinta el arco frontal
-        (LIDAR_FAN_ARC_DEG) porque WALL-E mira al frente.
+        El color codifica la distancia (`LIDAR_NEAR_COLOR` pegado,
+        `LIDAR_FAR_COLOR` libre), asi el viewport dice lo mismo que la
+        observacion de la politica sin leer numeros.
 
-        Se usan 36 lineas de debug persistentes que se actualizan con
-        replaceItemUniqueId: no se crean/borran items ni mallas por frame, que
-        es lo que hundia los FPS del renderer OpenGL2.
+        Cada rayo arranca en el borde del chasis y no en el centro: las
+        distancias de `lidar_meters` ya vienen descontado el semieje
+        (`_body_radius`), asi que el segmento dibujado mide exactamente lo
+        que reporta el sensor.
+
+        Se usan lineas de debug persistentes que se actualizan con
+        replaceItemUniqueId: no se crean ni se borran items por frame, que es
+        lo que hundia los FPS del renderer OpenGL2.
         """
         lidar = getattr(self.env, "lidar_meters", None)
         if lidar is None or len(lidar) == 0:
@@ -3338,19 +3243,39 @@ class WalleHud:
             return
         self._fan_key = key
 
+        radius_fn = getattr(self.env, "_body_radius", None)
         half_arc = math.radians(LIDAR_FAN_ARC_DEG) * 0.5
         step = 2.0 * math.pi / count
         hidden = [bx, by, -50.0]
+        oculto = (hidden, hidden, LIDAR_FAR_COLOR)
+
+        def body_radius(rel: float) -> float:
+            if callable(radius_fn):
+                try:
+                    return max(0.0, float(radius_fn(rel)))
+                except Exception:
+                    return 0.0
+            return 0.0
 
         def make_ray(rel: float, dist: float | None):
-            """Segmento (inicio, fin) de un rayo; None = sin impacto."""
+            """Segmento (inicio, fin, color) de un rayo; None = sin impacto."""
             if dist is None:
-                return (hidden, hidden)
+                return oculto
             ang = yaw + rel
             d = max(0.05, min(dist, max_dist))
+            radius = body_radius(rel)
+            ratio = (d / max_dist) ** LIDAR_GRADIENT_POWER
+            color = lidar_gradient(LIDAR_NEAR_COLOR, LIDAR_FAR_COLOR, ratio)
+            cos_a = math.cos(ang)
+            sin_a = math.sin(ang)
             return (
-                [bx, by, sensor_z],
-                [bx + math.cos(ang) * d, by + math.sin(ang) * d, sensor_z],
+                [bx + cos_a * radius, by + sin_a * radius, sensor_z],
+                [
+                    bx + cos_a * (radius + d),
+                    by + sin_a * (radius + d),
+                    sensor_z,
+                ],
+                color,
             )
 
         # Muestras reales del escaneo dentro del arco frontal.
@@ -3360,14 +3285,12 @@ class WalleHud:
             rel = (i * step + math.pi) % (2.0 * math.pi) - math.pi
             if abs(rel) > half_arc:
                 continue  # fuera del arco frontal
-            samples.append(
-                (rel, None if dist >= max_dist - 0.05 else dist)
-            )
+            samples.append((rel, None if dist >= max_dist - 0.05 else dist))
 
         # Se interpola un rayo extra entre cada par de muestras: el abanico
         # pasa de 5 a 2.5 grados de separacion y se ve denso, no como lineas
         # sueltas. La interpolacion es lineal porque la escena es plana.
-        segments: list[tuple[list[float], list[float]]] = []
+        segments: list[tuple[list[float], list[float], list[float]]] = []
         for index, (rel, dist) in enumerate(samples):
             segments.append(make_ray(rel, dist))
             if index + 1 < len(samples):
@@ -3380,40 +3303,15 @@ class WalleHud:
                         )
                     )
 
-        color = LIDAR_FAN_COLOR
-        for index, (start, end) in enumerate(segments):
-            if index < len(self._fan_lines):
-                try:
-                    p.addUserDebugLine(
-                        start,
-                        end,
-                        color,
-                        lineWidth=LIDAR_FAN_LINE_WIDTH,
-                        lifeTime=0.0,
-                        replaceItemUniqueId=self._fan_lines[index],
-                    )
-                except Exception:
-                    pass
-            else:
-                try:
-                    item = p.addUserDebugLine(
-                        start,
-                        end,
-                        color,
-                        lineWidth=LIDAR_FAN_LINE_WIDTH,
-                        lifeTime=0.0,
-                    )
-                    self._fan_lines.append(item)
-                except Exception:
-                    pass
+        self._dibujar_lineas(self._fan_lines, segments, LIDAR_FAN_LINE_WIDTH)
 
     def _update_lidar_cone(self, pos, yaw) -> None:
-        """Pinta los 36 rayos del cono de decision, en ambar.
+        """Pinta los 36 rayos del cono de decision, en ambar calido.
 
         El anillo de 72 se dibuja azul y gira completo; estos 36 son los que
         entran en la observacion de la politica y los que usan el frenado y la
-        esquiva. Se pintan encima, mas gruesos y en otro color, para que se vea
-        de un vistazo que sector esta mandando en la decision.
+        esquiva. Van encima, mas gruesos y con su propio gradiente, para que
+        se vea de un vistazo que sector esta mandando en la decision.
 
         Cada rayo arranca en el PARAGOLPES, no en el centro: las distancias de
         `fan_meters` ya vienen descontado el semieje del chasis, asi que el
@@ -3434,56 +3332,91 @@ class WalleHud:
 
         radius_fn = getattr(self.env, "_body_radius", None)
         hidden = [bx, by, -50.0]
-        color = LIDAR_CONE_COLOR
+        segments: list[tuple[list[float], list[float], list[float]]] = []
         for index in range(len(angles)):
             rel = float(angles[index])
             dist = float(meters[index])
             ang = yaw + rel
             if dist >= max_dist * LIDAR_CONE_HIDE_M:
-                start = end = hidden
-            else:
-                # Arranca en el borde del chasis en esa direccion.
-                if callable(radius_fn):
-                    try:
-                        radius = float(radius_fn(rel))
-                    except Exception:
-                        radius = 0.0
-                else:
+                segments.append((hidden, hidden, LIDAR_CONE_FAR))
+                continue
+            # Arranca en el borde del chasis en esa direccion.
+            if callable(radius_fn):
+                try:
+                    radius = max(0.0, float(radius_fn(rel)))
+                except Exception:
                     radius = 0.0
-                d = max(0.02, min(dist, max_dist))
-                cos_a = math.cos(ang)
-                sin_a = math.sin(ang)
-                start = [bx + cos_a * radius, by + sin_a * radius, sensor_z]
-                end = [
-                    bx + cos_a * (radius + d),
-                    by + sin_a * (radius + d),
-                    sensor_z,
-                ]
-            if index < len(self._cone_lines):
+            else:
+                radius = 0.0
+            d = max(0.02, min(dist, max_dist))
+            ratio = (d / max_dist) ** LIDAR_GRADIENT_POWER
+            color = lidar_gradient(LIDAR_CONE_NEAR, LIDAR_CONE_FAR, ratio)
+            cos_a = math.cos(ang)
+            sin_a = math.sin(ang)
+            segments.append(
+                (
+                    [bx + cos_a * radius, by + sin_a * radius, sensor_z],
+                    [
+                        bx + cos_a * (radius + d),
+                        by + sin_a * (radius + d),
+                        sensor_z,
+                    ],
+                    color,
+                )
+            )
+        self._dibujar_lineas(self._cone_lines, segments, LIDAR_CONE_LINE_WIDTH)
+
+    def _dibujar_lineas(
+        self,
+        pool: list[int],
+        segments: list[tuple[list[float], list[float], list[float]]],
+        width: float,
+    ) -> None:
+        """Actualiza un pool de lineas persistentes con los segmentos dados.
+
+        Reutiliza los items existentes con `replaceItemUniqueId` y solo crea
+        los que faltan. Los sobrantes se colapsan bajo el piso en vez de
+        borrarse: crear y borrar items por frame es lo que bajaba los FPS.
+        """
+        for index, (start, end, color) in enumerate(segments):
+            if index < len(pool):
                 try:
                     p.addUserDebugLine(
                         start,
                         end,
                         color,
-                        lineWidth=LIDAR_CONE_LINE_WIDTH,
+                        lineWidth=width,
                         lifeTime=0.0,
-                        replaceItemUniqueId=self._cone_lines[index],
+                        replaceItemUniqueId=pool[index],
                     )
                 except Exception:
                     pass
             else:
                 try:
-                    item = p.addUserDebugLine(
-                        start,
-                        end,
-                        color,
-                        lineWidth=LIDAR_CONE_LINE_WIDTH,
-                        lifeTime=0.0,
+                    pool.append(
+                        p.addUserDebugLine(
+                            start,
+                            end,
+                            color,
+                            lineWidth=width,
+                            lifeTime=0.0,
+                        )
                     )
-                    self._cone_lines.append(item)
                 except Exception:
                     pass
-
+        oculto = [0.0, 0.0, -50.0]
+        for index in range(len(segments), len(pool)):
+            try:
+                p.addUserDebugLine(
+                    oculto,
+                    oculto,
+                    [0.0, 0.0, 0.0],
+                    lineWidth=1.0,
+                    lifeTime=0.0,
+                    replaceItemUniqueId=pool[index],
+                )
+            except Exception:
+                pass
     def _update_contact_markers(self, pos) -> None:
         """Marca en naranja el punto exacto donde WALL-E está chocando.
 
@@ -4497,7 +4430,11 @@ def run_gui(args: argparse.Namespace) -> int:
         print(f"[TIME] {label}: {now - start:.2f}s", flush=True)
         return now
 
-    textured = bool(WALLE_USE_TEXTURE and VISUAL_OBJ.exists())
+    # La textura del MTL solo la respeta OpenGL3. En OpenGL2 el robot
+    # saldria gris plano, asi que ahi mandan las piezas de color.
+    textured = bool(
+        WALLE_USE_TEXTURE and args.opengl3 and VISUAL_OBJ.exists()
+    )
     if textured:
         # Una sola malla con su material y su PNG: la textura real del
         # personaje. Es también la opción más barata (1 visual en vez de 16).
@@ -4563,7 +4500,11 @@ def run_gui(args: argparse.Namespace) -> int:
             "[WALL-E] Vista de estudio: sin ejes ni panel de depuración.",
             flush=True,
         )
-        textured = bool(WALLE_USE_TEXTURE and VISUAL_OBJ.exists())
+        # La textura del MTL solo la respeta OpenGL3. En OpenGL2 el robot
+        # saldria gris plano, asi que ahi mandan las piezas de color.
+        textured = bool(
+            WALLE_USE_TEXTURE and args.opengl3 and VISUAL_OBJ.exists()
+        )
         visual = WalleVisual(env, parts, textured=textured)
         _t0 = _stage("malla del robot creada", _t0)
         if textured:
