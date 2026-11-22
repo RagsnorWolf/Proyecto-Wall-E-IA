@@ -33,6 +33,11 @@ import torch
 # el log se corta. Con faulthandler, si el fallo es un SIGSEGV, la traza de C
 # sale en stderr y dice en que llamada murio. Sin esto solo se sabe que murio.
 faulthandler.enable()
+
+# Y si se cuelga —sin error, sin CPU— el volcado periodico dice en que linea
+# esta esperando. Un cuelgue silencioso y un access violation se parecen mucho
+# en el log: las dos veces el proceso deja de escribir.
+faulthandler.dump_traceback_later(240, repeat=True)
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
