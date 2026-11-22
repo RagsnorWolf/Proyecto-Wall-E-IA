@@ -100,6 +100,7 @@ Simulador Wall-E\
   walle_piezas.py               parte la malla en 24 piezas de color solido
   tools_vista_previa.py         capturas headless a capturas\ para revisar el aspecto
   transplant_v4_to_v5.py        trasplante de pesos V4 → V5
+  transplant_v6_to_v7.py        trasplante de pesos V6 -> V7 (620k pasos conservados)
   models\                       las políticas entrenadas (.zip)
   material_0.png                textura real del robot, 2048×2048
   walle_visual.obj              la malla del robot

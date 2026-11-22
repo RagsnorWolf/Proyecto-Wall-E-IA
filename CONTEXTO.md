@@ -106,6 +106,7 @@ walle_piezas.py               24 piezas de color sólido desde la malla
 tools_vista_previa.py         capturas headless a capturas\
 train_walle_v5.py             entrenamiento
 transplant_v4_to_v5.py        trasplante de pesos V4 → V5
+transplant_v6_to_v7.py        trasplante de pesos V6 -> V7 (620k pasos conservados)
 models\                       las políticas entrenadas
 material_0.png                textura del robot, 2048×2048
 walle_visual.obj              la malla

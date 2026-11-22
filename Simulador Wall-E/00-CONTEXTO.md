@@ -101,6 +101,7 @@ Simulador Wall-E\
   walle_piezas.py               parte la malla en 24 piezas de color solido
   tools_vista_previa.py         capturas headless a capturas\ para revisar el aspecto
   transplant_v4_to_v5.py        trasplante de pesos V4 → V5
+  transplant_v6_to_v7.py        trasplante de pesos V6 -> V7 (620k pasos conservados)
   tools_soak_entorno.py         banco de fatiga del entorno (RSS, pasos/s)
   probe_clientes.py             prueba de que cada entorno tiene su mundo
   models\                       las políticas entrenadas (.zip)

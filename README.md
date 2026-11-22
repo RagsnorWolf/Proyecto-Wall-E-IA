@@ -71,6 +71,7 @@ interactive_walle.py          GUI, chat y controlador
 walle_env_v3.py               entorno V5, observación de 58 números
 train_walle_v5.py             entrenamiento
 transplant_v4_to_v5.py        trasplante de pesos V4 → V5
+transplant_v6_to_v7.py        trasplante de pesos V6 -> V7 (620k pasos conservados)
 models\                       las políticas entrenadas
 material_0.png                textura del robot, 2048×2048
 walle_visual.obj              la malla
