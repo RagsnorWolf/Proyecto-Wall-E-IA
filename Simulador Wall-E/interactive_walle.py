@@ -3053,7 +3053,12 @@ def ensure_colored_parts() -> list[tuple[str, tuple[float, float, float], int]]:
         return []
 
 
-def build_connect_options(gl3: bool = True) -> str:
+def build_connect_options(gl3: bool = False) -> str:
+    # Por defecto OpenGL2. En esta PC (AMD Radeon RX Vega 11) pedir OpenGL3
+    # no falla con error: la llamada a loadURDF("plane.urdf") se queda
+    # esperando para siempre y el simulador arranca "colgado", sin ventana y
+    # sin mensaje. Medido: connect 0.36 s y despues nunca vuelve.
+    # Con OpenGL2 el mismo arranque completo tarda 0.71 s.
     renderer = "--opengl3" if gl3 else "--opengl2"
     return (
         f"{renderer} --width=1000 --height=700 "
@@ -4507,7 +4512,7 @@ def run_gui(args: argparse.Namespace) -> int:
                 flush=True,
             )
 
-    renderer_name = "OpenGL3" if args.opengl3 else "OpenGL2 (fallback)"
+    renderer_name = "OpenGL3" if args.opengl3 else "OpenGL2 (estable)"
     print(f"[WALL-E] Conectando la simulación ({renderer_name})...", flush=True)
     robot_link = open_robot_link(args)
     if args.env == "v3" and WallEEnvV3 is not None:
@@ -4564,7 +4569,7 @@ def run_gui(args: argparse.Namespace) -> int:
         if textured:
             print(
                 f"[WALL-E] Textura aplicada: {VISUAL_OBJ.name} + "
-                f"{MATERIAL_MTL.name} + {TEXTURE_PNG.name} (OpenGL3).",
+                f"{MATERIAL_MTL.name} + {TEXTURE_PNG.name} ({renderer_name}).",
                 flush=True,
             )
         hud = WalleHud(env)
@@ -4773,11 +4778,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Ruta del modelo PPO para --mode ppo (por defecto: %(default)s)",
     )
     parser.add_argument(
+        "--opengl3",
+        dest="opengl3",
+        action="store_true",
+        default=False,
+        help=(
+            "Usar el renderer OpenGL3 (por defecto: OpenGL2). "
+            "En esta PC OpenGL3 se cuelga al cargar el mundo."
+        ),
+    )
+    parser.add_argument(
         "--opengl2",
         dest="opengl3",
         action="store_false",
-        default=True,
-        help="Usar el fallback OpenGL2 (por defecto: OpenGL3)",
+        help="Alias de compatibilidad: fuerza OpenGL2 (ya es el default).",
     )
     parser.add_argument(
         "--env",
