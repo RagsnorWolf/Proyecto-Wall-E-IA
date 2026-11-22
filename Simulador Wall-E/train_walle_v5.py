@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import os
+import re
 import time
 
 import torch
@@ -233,7 +234,25 @@ def main() -> None:
     # SB3 guarda el .pkl junto al checkpoint si se le pide; acá se recupera.
     if args.resume and os.path.exists(args.resume):
         print(f"[TRAIN_V5] Cargando modelo existente: {args.resume}")
+        # El .pkl no siempre se llama igual que el .zip: CheckpointCallback lo
+        # guarda como `walle_v6_vecnormalize_490000_steps.pkl`, con el paso en
+        # medio. Se prueban los dos nombres y, si no, se busca el pkl que lleve
+        # el mismo numero de pasos en la misma carpeta.
         pkl = args.resume[: -len(".zip")] + "_vecnormalize.pkl"
+        if not os.path.exists(pkl):
+            carpeta, nombre = os.path.split(args.resume)
+            # El paso es el numero pegado a "_steps": el "6" de la version no
+            # cuenta, y por eso no vale con juntar todos los digitos.
+            coincidencia = re.search(r"_(\d+)_steps\.zip$", nombre)
+            pasos = coincidencia.group(1) if coincidencia else ""
+            candidatos_pkl = []
+            for otro in sorted(os.listdir(carpeta or ".")):
+                if not otro.endswith(".pkl") or "vecnormalize" not in otro:
+                    continue
+                if not pasos or pasos in otro:
+                    candidatos_pkl.append(os.path.join(carpeta, otro))
+            if candidatos_pkl:
+                pkl = candidatos_pkl[-1]
         if os.path.exists(pkl):
             env = VecNormalize.load(pkl, env.venv)
             env.training = True

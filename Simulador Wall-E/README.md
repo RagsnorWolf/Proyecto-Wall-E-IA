@@ -106,6 +106,28 @@ empieza de cero.
 matan el entrenamiento con `0xC0000005` sin traceback: el log se corta limpio y
 parece que terminó bien. Ni GUI, ni diagnósticos, ni pruebas.
 
+### Si se corta
+
+El entrenamiento son horas. Un reinicio, un cierre de sesión o abrir el
+simulador lo matan, y no avisa. Para eso está `continuar_entrenamiento.ps1` y la
+tarea programada **`WALL-E Entrenamiento`**, que lo llama cada 10 minutos:
+
+```powershell
+Get-ScheduledTask -TaskName "WALL-E Entrenamiento" | Select-Object TaskName,State
+Start-ScheduledTask  -TaskName "WALL-E Entrenamiento"   # relanzar ya
+Disable-ScheduledTask -TaskName "WALL-E Entrenamiento"  # parar de relanzar
+```
+
+El guardián solo hace algo si se cumplen tres cosas: no existe
+`models\ENTRENAMIENTO_COMPLETO.txt`, no hay ya un `train_walle*` corriendo y hay
+un checkpoint que reanudar (o no hay modelo final todavía). Si el entrenamiento
+terminó de verdad, no toca nada; para volver a entrenar hay que borrar la marca.
+
+Los checkpoints se guardan con sus estadísticas de `VecNormalize`
+(`walle_v6_NNNNNN_steps_vecnormalize.pkl`). Si el `.pkl` no está —los anteriores
+a esta versión no lo tienen— el log avisa y el crítico arranca con la escala
+cruda: se ve en `ep_rew_mean` dando un salto los primeros miles de pasos.
+
 ## Dos entornos en el mismo proceso
 
 El entrenamiento usa `--workers 2`: dos WALL-E dentro del mismo proceso. Eso
