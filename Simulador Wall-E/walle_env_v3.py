@@ -105,13 +105,21 @@ FAN_OUTER_RAYS = 6
 # Cono que cuenta como "tengo algo delante" para premios y castigos.
 FRONT_CONE_DEG = 35.0
 
-# Hilos del barrido de rayos. Medido en esta build (Nov 2026), 72 rayos:
-#   nt=0 -> 0.13 ms, nt=2 -> 0.10 ms, nt=4 -> 0.11 ms (en régimen estable).
-# El primer escaneo con nt>0 paga la creación del pool (~75 ms) y, dentro de
-# SubprocVecEnv, el pool multihilo de pybullet provoca un access violation que
-# mata al worker (EOFError en el padre). Con nt=0 no hay pool y es igual de
-# rápido: se deja en 0.
-LIDAR_THREADS = 0
+# Hilos del barrido de rayos.
+#
+# Medido en esta build (Nov 2026), 72 rayos, en régimen estable:
+#   nt=0 -> 0.13 ms, nt=1 -> 0.002 ms, nt=4 -> 0.11 ms
+#
+# nt=0 NO significa "sin pool": pybullet toma el tamaño del pool del procesador
+# de comandos, lo levanta en el primer barrido y en esta build se queda colgado
+# ahí. Un barrido aislado con nt=0 no vuelve nunca; con nt=1 vuelve en 2 ms.
+# Ese cuelgue fue el que parecía un access violation del entrenamiento.
+#
+# nt=1 es el único valor estable: no crea hilos propios, así que tampoco puede
+# chocar con los de PyTorch ni provocar el access violation que aparecía dentro
+# de SubprocVecEnv (que ya no se usa: un proceso por entorno se cuelga al
+# levantar el segundo hijo en esta build).
+LIDAR_THREADS = 1
 
 # Recompensas V4 (sistema múltiple)
 CHUNK_DISCOVERY_REWARD = 10.0   # por cada celda nueva descubierta
@@ -399,22 +407,22 @@ class WallEEnvV3(WallEEnvV2):
         for i in range(max(2, self.obstacle_count // 2)):
             radius = float(self.np_random.uniform(0.15, 0.40))
             height = float(self.np_random.uniform(0.6, 2.0))
-            collision = p.createCollisionShape(
-                p.GEOM_CYLINDER, radius=radius, height=height
+            collision = self.p.createCollisionShape(
+                self.p.GEOM_CYLINDER, radius=radius, height=height
             )
-            visual = p.createVisualShape(
-                p.GEOM_CYLINDER,
+            visual = self.p.createVisualShape(
+                self.p.GEOM_CYLINDER,
                 radius=radius,
                 length=height,
                 rgbaColor=[0.6, 0.6, 0.62, 1.0],
             )
-            body = p.createMultiBody(
+            body = self.p.createMultiBody(
                 baseMass=0.0,
                 baseCollisionShapeIndex=collision,
                 baseVisualShapeIndex=visual,
                 basePosition=[0.0, 14.0 + i * 2.5, height / 2.0],
             )
-            p.changeDynamics(body, -1, lateralFriction=0.9, restitution=0.0)
+            self.p.changeDynamics(body, -1, lateralFriction=0.9, restitution=0.0)
             self.cylinder_ids.append(body)
             self.cylinder_radii.append(radius)
 
@@ -429,9 +437,9 @@ class WallEEnvV3(WallEEnvV2):
 
         # Sombras en la GUI (entorno más realista)
         try:
-            info = p.getConnectionInfo()
-            if int(info.get("connectionMethod", -1)) == int(p.GUI):
-                p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1)
+            info = self.p.getConnectionInfo()
+            if int(info.get("connectionMethod", -1)) == int(self.p.GUI):
+                self.p.configureDebugVisualizer(self.p.COV_ENABLE_SHADOWS, 1)
         except Exception:
             pass
 
@@ -451,7 +459,7 @@ class WallEEnvV3(WallEEnvV2):
         )
         for index, body in enumerate(all_bodies):
             try:
-                p.changeVisualShape(
+                self.p.changeVisualShape(
                     body, -1, rgbaColor=list(neutral_palette[index % 3])
                 )
             except Exception:
@@ -477,20 +485,20 @@ class WallEEnvV3(WallEEnvV2):
             ([0.0, -half - wall_thickness, wall_half_height],
              [half_len, wall_thickness, wall_half_height]),
         ]:
-            collision = p.createCollisionShape(
-                p.GEOM_BOX, halfExtents=half_extents
+            collision = self.p.createCollisionShape(
+                self.p.GEOM_BOX, halfExtents=half_extents
             )
-            visual = p.createVisualShape(
-                p.GEOM_BOX, halfExtents=half_extents,
+            visual = self.p.createVisualShape(
+                self.p.GEOM_BOX, halfExtents=half_extents,
                 rgbaColor=wall_color,
             )
-            body = p.createMultiBody(
+            body = self.p.createMultiBody(
                 baseMass=0.0,
                 baseCollisionShapeIndex=collision,
                 baseVisualShapeIndex=visual,
                 basePosition=pos,
             )
-            p.changeDynamics(body, -1, lateralFriction=0.9, restitution=0.0)
+            self.p.changeDynamics(body, -1, lateralFriction=0.9, restitution=0.0)
             self.long_wall_ids.append(body)
             self.long_wall_positions.append((pos[0], pos[1]))
 
@@ -516,23 +524,23 @@ class WallEEnvV3(WallEEnvV2):
             # Centro a media altura del plano inclinado, hundido medio grosor
             # para que la cara superior del borde bajo toque el suelo.
             z = half_len * abs(math.sin(pitch)) - thickness * 0.5
-            collision = p.createCollisionShape(
-                p.GEOM_BOX, halfExtents=half_extents
+            collision = self.p.createCollisionShape(
+                self.p.GEOM_BOX, halfExtents=half_extents
             )
-            visual = p.createVisualShape(
-                p.GEOM_BOX,
+            visual = self.p.createVisualShape(
+                self.p.GEOM_BOX,
                 halfExtents=half_extents,
                 rgbaColor=[0.55, 0.55, 0.58, 1.0],
             )
-            quat = p.getQuaternionFromEuler([0.0, pitch, 0.0])
-            body = p.createMultiBody(
+            quat = self.p.getQuaternionFromEuler([0.0, pitch, 0.0])
+            body = self.p.createMultiBody(
                 baseMass=0.0,
                 baseCollisionShapeIndex=collision,
                 baseVisualShapeIndex=visual,
                 basePosition=[x, y, z],
                 baseOrientation=quat,
             )
-            p.changeDynamics(body, -1, lateralFriction=1.0, restitution=0.0)
+            self.p.changeDynamics(body, -1, lateralFriction=1.0, restitution=0.0)
             self.ramp_ids.append(body)
             self.ramp_positions.append((x, y))
 
@@ -553,21 +561,21 @@ class WallEEnvV3(WallEEnvV2):
                 (half_a, [cx, cy, height / 2.0]),
                 (half_b, pos_b),
             ]:
-                collision = p.createCollisionShape(
-                    p.GEOM_BOX, halfExtents=half_extents
+                collision = self.p.createCollisionShape(
+                    self.p.GEOM_BOX, halfExtents=half_extents
                 )
-                visual = p.createVisualShape(
-                    p.GEOM_BOX,
+                visual = self.p.createVisualShape(
+                    self.p.GEOM_BOX,
                     halfExtents=half_extents,
                     rgbaColor=[0.35, 0.35, 0.38, 1.0],
                 )
-                body = p.createMultiBody(
+                body = self.p.createMultiBody(
                     baseMass=0.0,
                     baseCollisionShapeIndex=collision,
                     baseVisualShapeIndex=visual,
                     basePosition=position,
                 )
-                p.changeDynamics(
+                self.p.changeDynamics(
                     body, -1, lateralFriction=0.9, restitution=0.0
                 )
                 self.l_wall_ids.append(body)
@@ -590,22 +598,22 @@ class WallEEnvV3(WallEEnvV2):
         # fina, del color del suelo y a ras del piso: invisible en la escena.
         zone_color = [0.26, 0.26, 0.28, 1.0]
         for position, half_extents, mu in zones:
-            collision = p.createCollisionShape(
-                p.GEOM_BOX, halfExtents=half_extents
+            collision = self.p.createCollisionShape(
+                self.p.GEOM_BOX, halfExtents=half_extents
             )
-            visual = p.createVisualShape(
-                p.GEOM_BOX,
+            visual = self.p.createVisualShape(
+                self.p.GEOM_BOX,
                 halfExtents=[half_extents[0], half_extents[1], 0.001],
                 rgbaColor=zone_color,
                 visualFramePosition=[0.0, 0.0, -0.005],
             )
-            body = p.createMultiBody(
+            body = self.p.createMultiBody(
                 baseMass=0.0,
                 baseCollisionShapeIndex=collision,
                 baseVisualShapeIndex=visual,
                 basePosition=position,
             )
-            p.changeDynamics(body, -1, lateralFriction=mu, restitution=0.0)
+            self.p.changeDynamics(body, -1, lateralFriction=mu, restitution=0.0)
             self.friction_zone_ids.append(body)
 
     def _place_obstacles(self) -> None:
@@ -641,12 +649,12 @@ class WallEEnvV3(WallEEnvV2):
                     float(self.np_random.uniform(-max_dist, max_dist)),
                 )
             positions.append(chosen)
-            p.resetBasePositionAndOrientation(
+            self.p.resetBasePositionAndOrientation(
                 body, [chosen[0], chosen[1], 0.0], [0.0, 0.0, 0.0, 1.0]
             )
 
         self.cylinder_positions = [
-            tuple(p.getBasePositionAndOrientation(body)[0][:2])
+            tuple(self.p.getBasePositionAndOrientation(body)[0][:2])
             for body in self.cylinder_ids
         ]
 
@@ -678,8 +686,8 @@ class WallEEnvV3(WallEEnvV2):
 
         Las distancias se devuelven desde el borde del robot: 0 = tocando.
         """
-        pos, quat = p.getBasePositionAndOrientation(self.robot)
-        yaw = float(p.getEulerFromQuaternion(quat)[2])
+        pos, quat = self.p.getBasePositionAndOrientation(self.robot)
+        yaw = float(self.p.getEulerFromQuaternion(quat)[2])
         # Altura sobre el suelo local: en llano da SENSOR_FOOT_Z exacto; sobre
         # una rampa sube con el robot, porque el sensor está atornillado a él.
         z = max(0.02, pos[2] - self.BASE_Z + SENSOR_FOOT_Z)
@@ -722,11 +730,11 @@ class WallEEnvV3(WallEEnvV2):
         # simulación entre el apagado y el encendido, así que la física no ve
         # nada raro. Grupo 1 / máscara 0xFFFF es el valor por defecto de
         # createMultiBody en pybullet 3.2.7.
-        p.setCollisionFilterGroupMask(self.robot, -1, 0, 0)
+        self.p.setCollisionFilterGroupMask(self.robot, -1, 0, 0)
         try:
-            results = p.rayTestBatch(froms, tos, numThreads=LIDAR_THREADS)
+            results = self.p.rayTestBatch(froms, tos, numThreads=LIDAR_THREADS)
         finally:
-            p.setCollisionFilterGroupMask(self.robot, -1, 1, 0xFFFF)
+            self.p.setCollisionFilterGroupMask(self.robot, -1, 1, 0xFFFF)
 
         meters = np.empty(total, dtype=np.float32)
         for i in range(total):
@@ -883,8 +891,8 @@ class WallEEnvV3(WallEEnvV2):
         hueco_ancho, hueco_dist = self._widest_gap()
 
         # --- rumbo al objetivo: qué hay justo en esa dirección -----------
-        pos, quat = p.getBasePositionAndOrientation(self.robot)
-        yaw = float(p.getEulerFromQuaternion(quat)[2])
+        pos, quat = self.p.getBasePositionAndOrientation(self.robot)
+        yaw = float(self.p.getEulerFromQuaternion(quat)[2])
         goal_bearing = wrap_angle(float(self.goal_angle) - yaw)
         goal_deg = math.degrees(goal_bearing)
         goal_clear = self._fan_sector_min(
@@ -900,7 +908,7 @@ class WallEEnvV3(WallEEnvV2):
         )
 
         # --- velocidad real en el eje del chasis ------------------------
-        lin_vel, _ = p.getBaseVelocity(self.robot)
+        lin_vel, _ = self.p.getBaseVelocity(self.robot)
         vel_adelante = (
             float(lin_vel[0]) * math.cos(yaw) + float(lin_vel[1]) * math.sin(yaw)
         )
@@ -962,7 +970,7 @@ class WallEEnvV3(WallEEnvV2):
         """Actualiza el mapa de chunks con la posición actual y obstáculos."""
         pos = self._pose().pos if hasattr(self, "_pose") else None
         if pos is None:
-            pos, _ = p.getBasePositionAndOrientation(self.robot)
+            pos, _ = self.p.getBasePositionAndOrientation(self.robot)
         # Marcar celda actual como libre
         self.chunk_mapper.update_position(float(pos[0]), float(pos[1]))
 
@@ -978,7 +986,7 @@ class WallEEnvV3(WallEEnvV2):
         cx, cy = pos[0], pos[1]
         cell_size = self.chunk_mapper.cell_size
         for body in bodies:
-            bpos, _ = p.getBasePositionAndOrientation(body)
+            bpos, _ = self.p.getBasePositionAndOrientation(body)
             # Solo procesar obstáculos cerca del robot (rendimiento)
             if math.hypot(bpos[0] - cx, bpos[1] - cy) > 8.0:
                 continue
@@ -1026,7 +1034,7 @@ class WallEEnvV3(WallEEnvV2):
         points: list[tuple[float, float, float]] = []
         normals: list[tuple[float, float, float]] = []
         for body_id in bodies:
-            contacts = p.getContactPoints(bodyA=self.robot, bodyB=body_id)
+            contacts = self.p.getContactPoints(bodyA=self.robot, bodyB=body_id)
             for contact in contacts:
                 # Un punto de contacto NO es un choque. PyBullet deja pares
                 # "fantasma" en la lista con normalForce=0 y sin penetración:
@@ -1153,7 +1161,7 @@ class WallEEnvV3(WallEEnvV2):
         self._prev_collision = collided
 
         # ── 3) Movimiento continuo / quieto ──
-        pos, _ = p.getBasePositionAndOrientation(self.robot)
+        pos, _ = self.p.getBasePositionAndOrientation(self.robot)
         moved = 0.0
         if self._last_pos is not None:
             moved = math.hypot(
@@ -1276,8 +1284,8 @@ class WallEEnvV3(WallEEnvV2):
         return obs, float(reward), bool(terminated), bool(truncated), info
 
     def _pose(self):
-        pos, quat = p.getBasePositionAndOrientation(self.robot)
-        yaw = float(p.getEulerFromQuaternion(quat)[2])
+        pos, quat = self.p.getBasePositionAndOrientation(self.robot)
+        yaw = float(self.p.getEulerFromQuaternion(quat)[2])
         return type("Pose", (), {"pos": pos, "yaw": yaw})()
 
 

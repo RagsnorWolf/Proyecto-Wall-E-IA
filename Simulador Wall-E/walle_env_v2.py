@@ -53,6 +53,7 @@ import gymnasium as gym
 import numpy as np
 import pybullet as p
 import pybullet_data
+from walle_pybullet import Cliente
 
 
 def wrap_angle(angle: float) -> float:
@@ -261,10 +262,15 @@ class WallEEnvV2(gym.Env):
                 "No se pudo conectar a PyBullet. Verificá la instalación."
             )
 
-        p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.setGravity(0.0, 0.0, -9.81)
-        p.setTimeStep(1.0 / self.physics_hz)
-        p.setPhysicsEngineParameter(
+        # Vista del modulo atada a ESTA conexion: sin esto, un segundo
+        # entorno en el mismo proceso opera sobre el cliente 0, que es
+        # el mundo del primero (ver walle_pybullet.py).
+        self.p = Cliente(self.client_id)
+
+        self.p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        self.p.setGravity(0.0, 0.0, -9.81)
+        self.p.setTimeStep(1.0 / self.physics_hz)
+        self.p.setPhysicsEngineParameter(
             numSolverIterations=20,
             numSubSteps=1,
             fixedTimeStep=1.0 / self.physics_hz,
@@ -273,7 +279,7 @@ class WallEEnvV2(gym.Env):
         )
 
         if self.render_mode == "human":
-            p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+            self.p.configureDebugVisualizer(self.p.COV_ENABLE_GUI, 0)
 
         self._build_world()
         self._build_walle()
@@ -283,7 +289,7 @@ class WallEEnvV2(gym.Env):
         self.start_pos = np.array(
             [0.0, 0.0, self.BASE_Z], dtype=np.float64
         )
-        self.start_orn = p.getQuaternionFromEuler([0.0, 0.0, 0.0])
+        self.start_orn = self.p.getQuaternionFromEuler([0.0, 0.0, 0.0])
 
         self.reset(seed=seed)
 
@@ -291,8 +297,8 @@ class WallEEnvV2(gym.Env):
     # Construcción del mundo
     # ------------------------------------------------------------------ #
     def _build_world(self) -> None:
-        self.plane = p.loadURDF("plane.urdf")
-        p.changeDynamics(self.plane, -1, lateralFriction=1.0)
+        self.plane = self.p.loadURDF("plane.urdf")
+        self.p.changeDynamics(self.plane, -1, lateralFriction=1.0)
 
         half = self.arena_half_size
         wall_half_height = 0.6
@@ -301,15 +307,15 @@ class WallEEnvV2(gym.Env):
         self.wall_ids: list[int] = []
 
         def add_wall(half_extents: list[float], position: list[float]) -> None:
-            collision = p.createCollisionShape(
-                p.GEOM_BOX, halfExtents=half_extents
+            collision = self.p.createCollisionShape(
+                self.p.GEOM_BOX, halfExtents=half_extents
             )
-            visual = p.createVisualShape(
-                p.GEOM_BOX,
+            visual = self.p.createVisualShape(
+                self.p.GEOM_BOX,
                 halfExtents=half_extents,
                 rgbaColor=wall_color,
             )
-            wall_id = p.createMultiBody(
+            wall_id = self.p.createMultiBody(
                 baseMass=0.0,
                 baseCollisionShapeIndex=collision,
                 baseVisualShapeIndex=visual,
@@ -343,57 +349,57 @@ class WallEEnvV2(gym.Env):
 
         # Dimensiones del robot físico: 35 × 30 × 28 cm.
         chassis_half = [0.175, 0.15, 0.14]
-        base_collision = p.createCollisionShape(
-            p.GEOM_BOX, halfExtents=chassis_half
+        base_collision = self.p.createCollisionShape(
+            self.p.GEOM_BOX, halfExtents=chassis_half
         )
 
         if not self.show_proxy_visuals:
             # Proxy invisible de verdad: una caja visual de 0.2 mm. Con
             # visualShapeIndex=-1 PyBullet dibuja la forma de colisión con
             # colores por defecto, y con alpha 0 OpenGL3 la pinta negra.
-            base_visual = p.createVisualShape(
-                p.GEOM_BOX,
+            base_visual = self.p.createVisualShape(
+                self.p.GEOM_BOX,
                 halfExtents=[0.0001, 0.0001, 0.0001],
                 rgbaColor=[0.0, 0.0, 0.0, 0.0],
             )
         elif self.visual_mesh_path:
-            base_visual = p.createVisualShape(
-                p.GEOM_MESH,
+            base_visual = self.p.createVisualShape(
+                self.p.GEOM_MESH,
                 fileName=self.visual_mesh_path,
                 meshScale=[1.0, 1.0, 1.0],
                 rgbaColor=[1.0, 1.0, 1.0, 1.0],
             )
         else:
-            base_visual = p.createVisualShape(
-                p.GEOM_BOX,
+            base_visual = self.p.createVisualShape(
+                self.p.GEOM_BOX,
                 halfExtents=chassis_half,
                 rgbaColor=[0.85, 0.65, 0.20, 1.0],
             )
 
-        link_orn_shape = p.getQuaternionFromEuler([math.pi / 2.0, 0.0, 0.0])
-        wheel_collision = p.createCollisionShape(
-            p.GEOM_CYLINDER,
+        link_orn_shape = self.p.getQuaternionFromEuler([math.pi / 2.0, 0.0, 0.0])
+        wheel_collision = self.p.createCollisionShape(
+            self.p.GEOM_CYLINDER,
             radius=wheel_radius,
             height=wheel_width,
             collisionFrameOrientation=link_orn_shape,
         )
         if self.show_proxy_visuals:
-            wheel_visual = p.createVisualShape(
-                p.GEOM_CYLINDER,
+            wheel_visual = self.p.createVisualShape(
+                self.p.GEOM_CYLINDER,
                 radius=wheel_radius,
                 length=wheel_width,
                 rgbaColor=[0.22, 0.22, 0.24, 1.0],
                 visualFrameOrientation=link_orn_shape,
             )
         else:
-            wheel_visual = p.createVisualShape(
-                p.GEOM_BOX,
+            wheel_visual = self.p.createVisualShape(
+                self.p.GEOM_BOX,
                 halfExtents=[0.0001, 0.0001, 0.0001],
                 rgbaColor=[0.0, 0.0, 0.0, 0.0],
             )
 
         identity_orn = [0.0, 0.0, 0.0, 1.0]
-        self.robot = p.createMultiBody(
+        self.robot = self.p.createMultiBody(
             baseMass=3.5,
             baseCollisionShapeIndex=base_collision,
             baseVisualShapeIndex=base_visual,
@@ -410,12 +416,12 @@ class WallEEnvV2(gym.Env):
             linkInertialFramePositions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
             linkInertialFrameOrientations=[identity_orn, identity_orn],
             linkParentIndices=[0, 0],
-            linkJointTypes=[p.JOINT_REVOLUTE, p.JOINT_REVOLUTE],
+            linkJointTypes=[self.p.JOINT_REVOLUTE, self.p.JOINT_REVOLUTE],
             linkJointAxis=[[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
         )
 
         for wheel_index in (0, 1):
-            p.changeDynamics(
+            self.p.changeDynamics(
                 self.robot,
                 wheel_index,
                 lateralFriction=1.8,
@@ -425,7 +431,7 @@ class WallEEnvV2(gym.Env):
                 rollingFriction=0.001,
                 restitution=0.0,
             )
-        p.changeDynamics(
+        self.p.changeDynamics(
             self.robot,
             -1,
             lateralFriction=0.4,
@@ -456,19 +462,19 @@ class WallEEnvV2(gym.Env):
                 float(self._init_rng.uniform(0.25, 0.75)),
                 1.0,
             ]
-            collision = p.createCollisionShape(
-                p.GEOM_BOX, halfExtents=half_extents
+            collision = self.p.createCollisionShape(
+                self.p.GEOM_BOX, halfExtents=half_extents
             )
-            visual = p.createVisualShape(
-                p.GEOM_BOX, halfExtents=half_extents, rgbaColor=color
+            visual = self.p.createVisualShape(
+                self.p.GEOM_BOX, halfExtents=half_extents, rgbaColor=color
             )
-            body = p.createMultiBody(
+            body = self.p.createMultiBody(
                 baseMass=0.0,
                 baseCollisionShapeIndex=collision,
                 baseVisualShapeIndex=visual,
                 basePosition=[0.0, 12.0 + index * 2.0, hz],
             )
-            p.changeDynamics(
+            self.p.changeDynamics(
                 body,
                 -1,
                 lateralFriction=0.9,
@@ -519,7 +525,7 @@ class WallEEnvV2(gym.Env):
                 )
             positions.append(chosen)
             half_extents = self.obstacle_half_sizes[index]
-            p.resetBasePositionAndOrientation(
+            self.p.resetBasePositionAndOrientation(
                 body,
                 [chosen[0], chosen[1], half_extents[2]],
                 [0.0, 0.0, 0.0, 1.0],
@@ -543,13 +549,13 @@ class WallEEnvV2(gym.Env):
                 self.nominal_base_mass + 2.0 * self.wheel_mass
             )
 
-        p.changeDynamics(self.robot, -1, mass=float(base_mass))
+        self.p.changeDynamics(self.robot, -1, mass=float(base_mass))
 
         friction = float(
             self.np_random.uniform(*self.wheel_friction_range)
         )
         for wheel_index in (0, 1):
-            p.changeDynamics(
+            self.p.changeDynamics(
                 self.robot,
                 wheel_index,
                 mass=self.wheel_mass,
@@ -583,9 +589,9 @@ class WallEEnvV2(gym.Env):
     # Observación
     # ------------------------------------------------------------------ #
     def _get_obs(self) -> np.ndarray:
-        pos, quat = p.getBasePositionAndOrientation(self.robot)
-        lin_vel, ang_vel = p.getBaseVelocity(self.robot)
-        yaw = float(p.getEulerFromQuaternion(quat)[2])
+        pos, quat = self.p.getBasePositionAndOrientation(self.robot)
+        lin_vel, ang_vel = self.p.getBaseVelocity(self.robot)
+        yaw = float(self.p.getEulerFromQuaternion(quat)[2])
         # Ángulo objetivo relativo al frente actual (egocéntrico). Es mucho
         # más fácil de aprender que el ángulo global: la red no tiene que
         # combinar el cuaternión con el objetivo para calcular el error.
@@ -629,12 +635,12 @@ class WallEEnvV2(gym.Env):
     # ------------------------------------------------------------------ #
     def _has_collision(self) -> bool:
         for body_id in self.wall_ids + self.obstacle_ids:
-            if p.getContactPoints(bodyA=self.robot, bodyB=body_id):
+            if self.p.getContactPoints(bodyA=self.robot, bodyB=body_id):
                 return True
         return False
 
     def _tilt_rad(self, quat: tuple[float, ...]) -> tuple[float, float, float]:
-        roll, pitch, yaw = p.getEulerFromQuaternion(quat)
+        roll, pitch, yaw = self.p.getEulerFromQuaternion(quat)
         return float(roll), float(pitch), float(yaw)
 
     # ------------------------------------------------------------------ #
@@ -695,19 +701,19 @@ class WallEEnvV2(gym.Env):
         self._apply_mass_randomization()
 
         start_pos = [0.0, 0.0, self.BASE_Z]
-        start_orn = p.getQuaternionFromEuler([0.0, 0.0, yaw])
-        p.resetBasePositionAndOrientation(
+        start_orn = self.p.getQuaternionFromEuler([0.0, 0.0, yaw])
+        self.p.resetBasePositionAndOrientation(
             self.robot, start_pos, start_orn
         )
-        p.resetBaseVelocity(
+        self.p.resetBaseVelocity(
             self.robot, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
         )
         for joint_index in (0, 1):
-            p.resetJointState(self.robot, joint_index, targetValue=0.0)
-            p.setJointMotorControl2(
+            self.p.resetJointState(self.robot, joint_index, targetValue=0.0)
+            self.p.setJointMotorControl2(
                 self.robot,
                 joint_index,
-                p.VELOCITY_CONTROL,
+                self.p.VELOCITY_CONTROL,
                 targetVelocity=0.0,
                 force=self.max_force,
             )
@@ -726,11 +732,11 @@ class WallEEnvV2(gym.Env):
 
         # Asentar la física antes de observar.
         for _ in range(8):
-            p.stepSimulation()
+            self.p.stepSimulation()
 
         # Leer la pose real después de asentar: la precisión del origen es
         # importante para el robot físico y para el mapa de chunks.
-        settled_pos, settled_quat = p.getBasePositionAndOrientation(self.robot)
+        settled_pos, settled_quat = self.p.getBasePositionAndOrientation(self.robot)
         settled_roll, settled_pitch, settled_yaw = self._tilt_rad(settled_quat)
         self.prev_pos = np.asarray(settled_pos, dtype=np.float64)
         self.prev_heading_error = abs(
@@ -787,7 +793,7 @@ class WallEEnvV2(gym.Env):
 
     def get_pose(self) -> dict[str, float]:
         """Pose actual del robot, útil para el cuerpo y los sensores."""
-        pos, quat = p.getBasePositionAndOrientation(self.robot)
+        pos, quat = self.p.getBasePositionAndOrientation(self.robot)
         roll, pitch, yaw = self._tilt_rad(quat)
         return {
             "x": float(pos[0]),
@@ -823,17 +829,17 @@ class WallEEnvV2(gym.Env):
             yaw = float(self.initial_yaw)
 
         start_pos = [float(x), float(y), self.BASE_Z]
-        start_orn = p.getQuaternionFromEuler([0.0, 0.0, float(yaw)])
-        p.resetBasePositionAndOrientation(self.robot, start_pos, start_orn)
-        p.resetBaseVelocity(
+        start_orn = self.p.getQuaternionFromEuler([0.0, 0.0, float(yaw)])
+        self.p.resetBasePositionAndOrientation(self.robot, start_pos, start_orn)
+        self.p.resetBaseVelocity(
             self.robot, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
         )
         for joint_index in (0, 1):
-            p.resetJointState(self.robot, joint_index, targetValue=0.0)
-            p.setJointMotorControl2(
+            self.p.resetJointState(self.robot, joint_index, targetValue=0.0)
+            self.p.setJointMotorControl2(
                 self.robot,
                 joint_index,
-                p.VELOCITY_CONTROL,
+                self.p.VELOCITY_CONTROL,
                 targetVelocity=0.0,
                 force=self.max_force,
             )
@@ -847,9 +853,9 @@ class WallEEnvV2(gym.Env):
         self.tilt_counter = 0
 
         for _ in range(8):
-            p.stepSimulation()
+            self.p.stepSimulation()
 
-        settled_pos, settled_quat = p.getBasePositionAndOrientation(
+        settled_pos, settled_quat = self.p.getBasePositionAndOrientation(
             self.robot
         )
         settled_roll, settled_pitch, settled_yaw = self._tilt_rad(
@@ -919,30 +925,30 @@ class WallEEnvV2(gym.Env):
             except Exception as exc:  # noqa: BLE001 - el enlace nunca tumba el sim
                 print(f"[wheel_sink] {exc}")
                 self.wheel_sink = None
-        p.setJointMotorControl2(
+        self.p.setJointMotorControl2(
             self.robot,
             0,
-            p.VELOCITY_CONTROL,
+            self.p.VELOCITY_CONTROL,
             targetVelocity=left_speed,
             force=self.max_force,
         )
-        p.setJointMotorControl2(
+        self.p.setJointMotorControl2(
             self.robot,
             1,
-            p.VELOCITY_CONTROL,
+            self.p.VELOCITY_CONTROL,
             targetVelocity=right_speed,
             force=self.max_force,
         )
 
         for _ in range(self.substeps):
-            p.stepSimulation()
+            self.p.stepSimulation()
 
         if self.render_mode == "human":
             self.render()
 
-        pos, quat = p.getBasePositionAndOrientation(self.robot)
+        pos, quat = self.p.getBasePositionAndOrientation(self.robot)
         pos = np.asarray(pos, dtype=np.float64)
-        lin_vel, ang_vel = p.getBaseVelocity(self.robot)
+        lin_vel, ang_vel = self.p.getBaseVelocity(self.robot)
         roll, pitch, yaw = self._tilt_rad(quat)
 
         delta_x = float(pos[0] - self.prev_pos[0])
@@ -1100,8 +1106,8 @@ class WallEEnvV2(gym.Env):
     def render(self) -> None:
         if self.render_mode != "human":
             return
-        pos, _ = p.getBasePositionAndOrientation(self.robot)
-        p.resetDebugVisualizerCamera(
+        pos, _ = self.p.getBasePositionAndOrientation(self.robot)
+        self.p.resetDebugVisualizerCamera(
             cameraDistance=3.2,
             cameraYaw=40.0,
             cameraPitch=-25.0,
@@ -1118,7 +1124,7 @@ class WallEEnvV2(gym.Env):
                 pass
         if getattr(self, "client_id", -1) >= 0:
             try:
-                p.disconnect(self.client_id)
+                self.p.disconnect(self.client_id)
             except Exception:
                 # Si el cliente ya estaba desconectado, no hay nada que hacer.
                 pass

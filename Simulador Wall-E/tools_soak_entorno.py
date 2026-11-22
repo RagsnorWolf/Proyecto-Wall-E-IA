@@ -58,10 +58,25 @@ def rss_mb() -> float:
 
     cnt = _Cnt()
     cnt.cb = ctypes.sizeof(_Cnt)
-    handle = ctypes.windll.kernel32.GetCurrentProcess()
-    if not ctypes.windll.psapi.GetProcessMemoryInfo(
-        handle, ctypes.byref(cnt), cnt.cb
-    ):
+    kernel32 = ctypes.windll.kernel32
+    # En Windows moderno psapi vive en kernel32 como K32GetProcessMemoryInfo;
+    # el modulo psapi.dll existe pero puede no exponer el simbolo.
+    funcion = getattr(kernel32, "K32GetProcessMemoryInfo", None)
+    if funcion is None:
+        try:
+            funcion = ctypes.windll.psapi.GetProcessMemoryInfo
+        except Exception:
+            return 0.0
+
+    # Sin argtypes ctypes pasa el handle como c_int y trunca el pseudo-handle
+    # de GetCurrentProcess (-1 en 32 bits, 0xFFFF... en 64): la llamada falla
+    # y el banco reporta 0.0 MB como si no hubiera memoria.
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    funcion.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Cnt), ctypes.c_ulong]
+    funcion.restype = ctypes.c_int
+
+    handle = kernel32.GetCurrentProcess()
+    if not funcion(handle, ctypes.byref(cnt), cnt.cb):
         return 0.0
     return cnt.WorkingSetSize / (1024 * 1024)
 

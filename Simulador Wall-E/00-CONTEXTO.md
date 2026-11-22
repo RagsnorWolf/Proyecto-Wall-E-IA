@@ -95,8 +95,11 @@ Simulador Wall-E\
   WALL-E Robot Real.bat         manda las órdenes al ESP32 por WiFi
   interactive_walle.py          la GUI, el chat, el controlador
   walle_env_v3.py               el entorno V6: observación de 66 números
+  walle_pybullet.py             vista de PyBullet atada a una conexión concreta
   train_walle_v5.py             el entrenamiento
   transplant_v4_to_v5.py        trasplante de pesos V4 → V5
+  tools_soak_entorno.py         banco de fatiga del entorno (RSS, pasos/s)
+  probe_clientes.py             prueba de que cada entorno tiene su mundo
   models\                       las políticas entrenadas (.zip)
   material_0.png                textura real del robot, 2048×2048
   walle_visual.obj              la malla del robot
@@ -346,15 +349,18 @@ Estas están resueltas. Si alguien las vuelve a tocar, se rompe.
 |---|---|---|
 | `p.rayTestBatch(..., parentObjectUniqueId=robot, parentLinkIndex=-1)` | En PyBullet 3.2.7 **anula el lote entero**: todas las lecturas vuelven `(-1, frac 1.0)`, que el entorno interpreta como "libre a 6 m". WALL-E ve el mundo vacío y se come la pared | **Sacar al robot del broadphase**: `setCollisionFilterGroupMask(robot, -1, 0, 0)` → barrido → restaurar a `(1, 0xFFFF)` en un `finally` |
 | `parentLinkIndex=0` como alternativa | Excluye de verdad, pero depende de que el robot tenga al menos un link. Un robot sin links vuelve al fallo de arriba | No usar: el filtro de colisión no depende de la geometría |
-| `LIDAR_THREADS > 0` | Access violation en procesos hijos | `LIDAR_THREADS = 0` |
+| `LIDAR_THREADS = 0` con más de un entorno en el proceso | `rayTestBatch` **no vuelve nunca**: el proceso se queda colgado sin error. Medido en aislado: con `nt=0` el primer barrido no retorna ni en 15 s; con `nt=1` tarda 2 ms | `LIDAR_THREADS = 1`. PyBullet comparte un pool global de hilos de rayos entre clientes; con 0 no lo levanta y el barrido espera para siempre |
+| Llamadas `p.*` sin `physicsClientId` (198 en `walle_env*.py`) | El segundo entorno del proceso construye su mundo en el cliente 0, o sea **encima del primero**: `probe_clientes.py` lo midió con `cuerpos en A: 60 / en B: 0`, y el entrenamiento moría con `0xC0000005` a los pocos miles de pasos | `walle_pybullet.Cliente(client_id)`: cada entorno tiene su `self.p` y cada llamada lleva su `physicsClientId`. Las funciones puras se detectan por reintento ante `TypeError` (los builtins de PyBullet no exponen `__signature__`). `train_walle_v5.py` aborta si dos entornos comparten cliente |
 | Plano de escaneo a altura fija sobre la base | `pos[2] + 0.06` = 0.21 m del piso: una caja de 12 cm, una rampa baja o el borde de un escalón pasan por debajo del sensor | `pos[2] - BASE_Z + SENSOR_FOOT_Z` (altura sobre el suelo local) |
 | Distancia medida desde el centro del robot | Todos los umbrales (`NEAR_OBSTACLE_M`, `SAFE_GO_M`, `SAFE_SLOW_M`) quedaban 17,5 cm corridos y el robot frenaba lejos de todo | Restar `_body_radius(theta)` en cada rayo: 0 = tocando |
-| `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()` | Usar `DummyVecEnv` |
+| `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()`; y en esta build el **segundo hijo ni siquiera levanta** (se cuelga en el `connect`, probado con `probe_subproc.py`) | Usar `DummyVecEnv`; `train_walle_v5.py` rechaza `--vec subproc` con el motivo escrito |
+| `psapi.GetProcessMemoryInfo` en Windows moderno | Devuelve 0 sin error: el banco de fatiga marcaba `RSS 0.0 MB` y su veredicto "estable" no medía nada | `kernel32.K32GetProcessMemoryInfo`, con `GetCurrentProcess.restype = c_void_p` y `argtypes`; sin ellos ctypes trunca el pseudo-handle |
 | `rich` con stdout redirigido | Se bloquea | `progress_bar=False` |
 | `torch.set_num_threads` alto en inferencia | 1,5 s por paso | 1 hilo en inferencia, núcleos−2 en entrenamiento |
 | `COV_ENABLE_RGB_AXES` en PyBullet 3.2.7 | No existe, tira excepción | `getattr(p, "COV_ENABLE_RGB_AXES", None)` |
 | Un proceso GUI colgado | Deja ventana huérfana y bloquea el siguiente arranque | El `.bat` limpia antes de lanzar |
 | `PYTHONUTF8` sin definir | Un acento en un `print` mata el proceso | Siempre `PYTHONUTF8=1` |
+| Un `0xC0000005` sin `faulthandler` | El log se corta limpio y parece que terminó bien: no hay traceback porque el fallo es de C, no de Python | `faulthandler.enable()` al principio de `train_walle_v5.py`; imprime la pila del hilo que murió |
 
 ### 6.4 Cómo se comprueba que el sensor no miente
 
@@ -385,14 +391,15 @@ falla con el número exacto en vez de entrenar un robot ciego durante horas.
 | Consola de control | ✅ | 97 órdenes, 97 ACK, 0 reintentos, 0 timeouts |
 | Cadena simulador → UDP → puente | ✅ | 0 errores, parada limpia al cerrar |
 | Modo manual del simulador | ✅ | Avanzó 0,95 m de 1,00 · giró 43° de 45° |
-| Modo PPO del simulador | ✅ carga y decide | `RecurrentPPO (LSTM)`, obs 66D, política cargada |
-| Entrenamiento | ✅ | 1,2 M pasos, ~100 fps, `models\walle_ppo_model_v6.zip` |
+| Modo PPO del simulador | ⚠️ avisa y sigue en manual | Los tres `.zip` del repo son de 58 números y la observación actual es de 66: el cargador prueba todos, no encuentra ninguno y lo dice |
+| Entrenamiento | ✅ | 8192 pasos con 2 entornos (`Conexiones PyBullet: [0, 1]`), modelo y marca guardados; banco de fatiga: 20 000 pasos, RSS plano |
 | GUI | ✅ | 59 FPS estables, textura aplicada, sin ejes |
 
 ### Lo que está pendiente
 
 | Pendiente | Por qué | Desbloquea |
 |---|---|---|
+| **La corrida larga de 1,2 M** | El entorno ya aguanta 2 clientes y 20 000 pasos sin fuga; falta dejarla correr las horas que pide | Un `walle_ppo_model_v6.zip` de verdad, y ahí el modo PPO deja de caer a manual |
 | **Sensor de distancia real** | La política usa 36 rayos LiDAR que el robot físico no tiene | La autonomía real |
 | Compilar los `.ino` | No hay `arduino-cli` en la máquina | La primera verificación la hace quien los cargue |
 | Reconciliar el repo `IA` | Tiene contenido viejo de otra versión del proyecto | Que el push sea el proyecto real |

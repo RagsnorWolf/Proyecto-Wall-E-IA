@@ -11,7 +11,9 @@ Simulador Wall-E\
   WALL-E Robot Real.bat       <- manejar el robot fisico desde el simulador
   interactive_walle.py        <- la GUI y el controlador
   walle_env_v3.py             <- el entorno V6: observacion de 66 numeros
+  walle_pybullet.py           <- ata cada entorno a su propio cliente PyBullet
   tools_diag_lidar.py         <- diagnostico del sensor contra la geometria real
+  tools_soak_entorno.py       <- banco de fatiga: pasos, memoria, cuerpos vivos
   evaluar_v6.py               <- banco de pruebas: mide si el modelo aprendio
   test_v4_smoke.py            <- prueba rapida de que el entorno no miente
   models\                     <- las politicas entrenadas (.zip)
@@ -68,10 +70,14 @@ de 72 rayos se pinta azul y el abanico de 36 que decide se pinta ámbar encima.
 
 | Archivo | Pasos | Estado |
 |---|---|---|
-| `walle_ppo_model_v6.zip` | 1.2M | El que usa el modo PPO. Observación de 66 |
+| `walle_ppo_model_v6.zip` | — | No está en el repo: lo genera el entrenamiento. Observación de 66 |
 | `walle_ppo_model_v5_recovery.zip` | 1.3M heredados del V4 | Observación de 58: no carga con el entorno actual |
 | `walle_ppo_model_v4_lidar.zip` | 1 303 520 | La base del anterior. Navega bien |
 | `walle_ppo_model_v3_explorer.zip` | — | Histórico, por si hay que comparar |
+
+Los tres que vienen en el repo son de 58 números, así que con la observación de
+66 actual **ninguno encaja**: hasta que termine el primer entrenamiento V6, el
+modo PPO avisa y se queda en manual. Es lo esperado, no un fallo.
 
 El cargador no tiene dimensiones escritas a mano: prueba los modelos de
 `models\` y de `models\checkpoints\`, y se queda con el primero cuya
@@ -90,9 +96,50 @@ lanzador del simulador mata todo `train_walle*` para liberar CPU.
 Checkpoint cada 10 000 pasos en `models\checkpoints\`. A ~100 pasos por segundo,
 1.2M son unas 3 horas y media.
 
+`--timesteps` es el **total** del modelo, no "pasos que faltan". Si el `.zip`
+más reciente ya tiene 400 000, el mismo comando entrena los 800 000 que quedan.
+Así el guardián puede relanzar con el mismo número cada vez sin inflar el
+presupuesto. `--auto_resume` elige el checkpoint más nuevo, y si no hay ninguno
+empieza de cero.
+
 **No lances otro proceso PyBullet mientras entrena.** Dos procesos a la vez
 matan el entrenamiento con `0xC0000005` sin traceback: el log se corta limpio y
 parece que terminó bien. Ni GUI, ni diagnósticos, ni pruebas.
+
+## Dos entornos en el mismo proceso
+
+El entrenamiento usa `--workers 2`: dos WALL-E dentro del mismo proceso. Eso
+tiene dos trampas propias, y las dos ya están resueltas en el código. Si alguna
+vuelve, el síntoma es raro y no dice el motivo.
+
+| Trampa | Síntoma | Arreglo |
+|---|---|---|
+| Llamar `p.*` sin `physicsClientId` | El segundo robot construye su mundo **encima del primero**. El log se corta limpio con `0xC0000005` a los miles de pasos | Todo el entorno pasa por `walle_pybullet.Cliente`, que ata cada llamada a su cliente |
+| `LIDAR_THREADS = 0` | El primer barrido de rayos no vuelve nunca. El proceso queda colgado, sin error | `LIDAR_THREADS = 1` |
+
+Para comprobar que los dos mundos están de verdad separados:
+
+```bash
+.venv\Scripts\python.exe probe_clientes.py    # pone una pared solo en A y mide desde B
+.venv\Scripts\python.exe probe_subproc.py     # muestra por qué no se usa SubprocVecEnv
+```
+
+`probe_clientes.py` clava una pared en el entorno A a 0.58 m y mide el LiDAR del
+entorno B: si B la ve a 2.09 m, cada uno tiene su mundo. Si compartieran cliente,
+B vería la pared encima.
+
+Para medir si el proceso aguanta pasos sin fugas (RSS, cuerpos vivos,
+pasos/s) está el banco de fatiga:
+
+```bash
+.venv\Scripts\python.exe tools_soak_entorno.py --envs 2 --steps 20000
+```
+
+Imprime una línea cada 1000 pasos y termina con la pendiente de memoria. Si el
+RSS sube de forma sostenida, hay fuga; si se aplana, el problema está arriba,
+en PPO. Medido con 2 entornos y 20 000 pasos: 129 pasos/s, 16 episodios, 30
+cuerpos vivos y RSS clavado en 271 MB de punta a punta (pendiente −0,003 MB por
+1000 pasos).
 
 ## Comprobar que el sensor no miente
 

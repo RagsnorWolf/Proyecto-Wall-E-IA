@@ -8,10 +8,15 @@
 # reinicia la sesion que lo lanzo. Sin guardian, un reinicio a mitad de noche
 # deja el trabajo parado hasta que alguien mira.
 #
-# Condiciones para relanzar (las tres tienen que darse):
+# Condiciones para relanzar:
 #   1. No existe models\ENTRENAMIENTO_COMPLETO.txt
-#   2. No existe models\walle_ppo_model_v6.zip
-#   3. No hay ningun proceso train_walle* corriendo
+#   2. No hay ningun proceso train_walle* corriendo
+#   3. Hay algo que reanudar (un checkpoint) o no hay modelo final todavia
+#
+# Lo que NO mira: que exista models\walle_ppo_model_v6.zip. Ese archivo viene
+# en el repo, asi que mirarlo apagaba el guardian para siempre: decia
+# "se considera terminado" el primer dia y nunca reanudaba nada. Lo que manda
+# es la marca de terminacion, que solo escribe el entrenador al acabar.
 #
 # Uso:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File continuar_entrenamiento.ps1
@@ -45,10 +50,6 @@ if (-not $Force) {
         Escribir "el entrenamiento ya termino. No hago nada."
         exit 0
     }
-    if (Test-Path $Final) {
-        Escribir "existe $Final. Se considera terminado."
-        exit 0
-    }
 }
 
 $corriendo = @(
@@ -71,6 +72,11 @@ if (Test-Path (Join-Path $Modelos "checkpoints")) {
 
 if ($checkpoints.Count -gt 0) {
     Escribir ("reanudando desde " + $checkpoints[0].Name)
+} elseif (Test-Path $Final) {
+    # Modelo final en su sitio y sin checkpoints: no hay nada que reanudar.
+    # Relanzar desde cero tiraria el modelo que ya esta.
+    Escribir "hay modelo final y no hay checkpoints: nada que reanudar."
+    exit 0
 } else {
     Escribir "no hay checkpoints: arranca desde cero"
 }

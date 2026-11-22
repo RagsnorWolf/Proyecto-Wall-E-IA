@@ -23,18 +23,20 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import os
 import time
 
 import torch
+
+# Un access violation dentro de PyBullet no deja traceback: el proceso se va y
+# el log se corta. Con faulthandler, si el fallo es un SIGSEGV, la traza de C
+# sale en stderr y dice en que llamada murio. Sin esto solo se sabe que murio.
+faulthandler.enable()
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import (
-    DummyVecEnv,
-    SubprocVecEnv,
-    VecNormalize,
-)
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from walle_env_v3 import OBS_DIM, WallEEnvV3
 
@@ -148,20 +150,44 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
     n_envs = max(args.workers, 1)
-    env_fns = [make_env(i, args.stage, args.obstacle_count) for i in range(n_envs)]
 
-    # En esta build de PyBullet (Nov 2026) un entorno creado dentro de un
-    # proceso hijo de SubprocVecEnv puede terminar en access violation, que el
-    # padre sólo ve como EOFError. El entrenamiento tiene que arrancar siempre:
-    # por defecto se usa DummyVecEnv (en proceso) y subproc queda como opción
-    # explícita.
-    use_subproc = args.vec == "subproc"
-    if use_subproc:
-        print(f"[TRAIN_V5] Vectorización: SubprocVecEnv x{n_envs}")
-        env = SubprocVecEnv(env_fns)
-    else:
-        print(f"[TRAIN_V5] Vectorización: DummyVecEnv x{n_envs} (en proceso)")
-        env = DummyVecEnv(env_fns)
+    # SubprocVecEnv queda fuera. En esta build de PyBullet (Nov 2026) el
+    # segundo hijo no termina de levantar: se queda colgado en el connect y el
+    # padre espera para siempre. No es un access violation que se pueda leer en
+    # un traceback, es un cuelgue silencioso, y el entrenamiento nunca arranca.
+    #
+    # Un entorno por proceso tampoco hace falta: desde walle_pybullet cada
+    # entorno ata sus llamadas a su propia conexion, asi que N entornos en el
+    # mismo proceso son N mundos separados de verdad. Ver probe_clientes.py.
+    if args.vec == "subproc":
+        print(
+            "[TRAIN_V5] SubprocVecEnv no se usa en esta build: el segundo hijo "
+            "se cuelga al conectar.\n"
+            "[TRAIN_V5] Los entornos van en proceso (--vec dummy) y cada uno "
+            "opera sobre su propio physicsClientId."
+        )
+        print("[TRAIN_V5] Ver probe_subproc.py y probe_clientes.py para el detalle.")
+        return
+
+    env_fns = [make_env(i, args.stage, args.obstacle_count) for i in range(n_envs)]
+    print(f"[TRAIN_V5] Vectorización: DummyVecEnv x{n_envs} (en proceso)")
+    env = DummyVecEnv(env_fns)
+
+    # Guarda contra la regresion que costo meses: si dos entornos comparten
+    # physicsClientId, el segundo construye su mundo dentro del primero y el
+    # entrenamiento corre sobre observaciones que no son las de su robot.
+    # Preferible negarse a entrenar que entrenar mal en silencio.
+    clientes = [
+        int(getattr(sub, "env", sub).client_id) for sub in env.envs
+    ]
+    if len(set(clientes)) != len(clientes):
+        env.close()
+        raise SystemExit(
+            f"[TRAIN_V5] ABORTADO: los entornos comparten conexion de PyBullet "
+            f"({clientes}). Revisar walle_pybullet.py: sin clientes distintos "
+            f"cada entorno lee el mundo del primero."
+        )
+    print(f"[TRAIN_V5] Conexiones PyBullet: {clientes} (una por entorno)")
 
     # Normalizar SOLO la recompensa, nunca la observación.
     #
@@ -191,8 +217,28 @@ def main() -> None:
             args.resume = max(candidatos, key=os.path.getmtime)
             print(f"[TRAIN_V5] auto_resume: {os.path.basename(args.resume)}")
 
+    # --- Estadísticas de normalización: guardar y recuperar ------------- #
+    # Esto es lo que rompía cada reanudación. `VecNormalize` mantiene una
+    # media y una varianza móviles del retorno; si se recrea vacía al cargar
+    # un modelo, el crítico ve de golpe retornos en su escala cruda (±200)
+    # cuando aprendió con ellos normalizados (±1). El error de valor se
+    # dispara, la política colapsa y el robot termina el episodio con -227
+    # puntos sin haber aprendido nada nuevo. Pasó tres veces.
+    #
+    # SB3 guarda el .pkl junto al checkpoint si se le pide; acá se recupera.
     if args.resume and os.path.exists(args.resume):
         print(f"[TRAIN_V5] Cargando modelo existente: {args.resume}")
+        pkl = args.resume[: -len(".zip")] + "_vecnormalize.pkl"
+        if os.path.exists(pkl):
+            env = VecNormalize.load(pkl, env.venv)
+            env.training = True
+            print(f"[TRAIN_V5] Estadísticas de recompensa recuperadas: {pkl}")
+        else:
+            print(
+                "[TRAIN_V5] AVISO: no hay .pkl de VecNormalize para este "
+                "checkpoint. Las estadísticas arrancan de cero: el crítico "
+                "va a ver un salto de escala."
+            )
         model = RecurrentPPO.load(args.resume, env)
     else:
         print(f"[TRAIN_V5] Entrenando desde cero (obs {OBS_DIM}D, LSTM)")
@@ -217,7 +263,30 @@ def main() -> None:
             ),
         )
 
-    print(f"[TRAIN_V5] Entrenando por {args.timesteps} pasos de tiempo...")
+    # --timesteps es el objetivo TOTAL del modelo, no "pasos que faltan".
+    #
+    # Con reset_num_timesteps=False, SB3 suma lo que le pases a los pasos que ya
+    # trae el modelo. El guardian relanza con --timesteps 1200000 cada vez, asi
+    # que sin esta resta cada reinicio agrandaba el presupuesto (300k + 1.2M =
+    # 1.5M, y al siguiente 2.7M) sin que nadie lo decidiera. Restando, un
+    # reinicio a mitad de camino sigue apuntando al mismo total.
+    objetivo = int(args.timesteps)
+    ya_hechos = int(model.num_timesteps)
+    restantes = objetivo - ya_hechos
+    if restantes <= 0:
+        print(
+            f"[TRAIN_V5] El modelo ya tiene {ya_hechos:,} pasos y el objetivo "
+            f"es {objetivo:,}: no queda nada por entrenar."
+        )
+        env.close()
+        return
+    if ya_hechos:
+        print(
+            f"[TRAIN_V5] Reanudando: {ya_hechos:,} hechos, "
+            f"{restantes:,} restantes hasta {objetivo:,}"
+        )
+
+    print(f"[TRAIN_V5] Entrenando por {restantes} pasos de tiempo...")
     start = time.time()
     checkpoint_dir = os.path.join(args.output_dir, "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -229,10 +298,12 @@ def main() -> None:
         save_path=checkpoint_dir,
         name_prefix="walle_v6",
         save_replay_buffer=False,
-        save_vecnormalize=False,
+        # Sin esto, cada reanudación reinicia la media y la varianza del
+        # retorno y el crítico recibe un salto de escala que rompe la política.
+        save_vecnormalize=True,
     )
     model.learn(
-        total_timesteps=args.timesteps,
+        total_timesteps=restantes,
         # progress_bar usa rich sobre stdout: con la salida redirigida a un
         # fichero (como hace el lanzador) se queda bloqueado y el padre no
         # arranca el rollout. Log de texto con verbose=1 es suficiente.
