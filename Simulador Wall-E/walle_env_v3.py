@@ -81,6 +81,10 @@ LIDAR_MAX_DIST = 6.0            # alcance máximo en metros
 #   plano a 0.21 m -> caja de 12 cm a 0.75 m: lectura 6.000 m (no la ve)
 #   plano a 0.06 m -> la misma caja: lectura correcta
 SENSOR_FOOT_Z = 0.06
+# Segundo plano de escaneo: por encima de esto hay techo. 34 cm es la
+# altura del chasis, asi que un obstaculo que llega hasta aca bloquea
+# de verdad y uno mas bajo se puede trepar.
+HEADROOM_FOOT_Z = 0.34
 # Semiejes del chasis (walle_env_v2: chassis_half = [0.175, 0.15, 0.14]).
 # El LiDAR mide desde el CENTRO del robot, pero el choque ocurre en el borde.
 # Restar este radio hace que 0 signifique "tocando", que es lo que asumen
@@ -180,7 +184,7 @@ COLLISION_MIN_PENETRATION_M = 0.001  # 1 mm de penetración mínima
 # Observación extendida: 14 base + 36 LiDAR + 16 de resolución de problemas.
 # Los primeros 8 extras son los del V5; los 8 nuevos van al final para no
 # mover ninguna columna existente.
-OBS_EXTRAS = 16
+OBS_EXTRAS = 24
 OBS_DIM = 14 + SENSOR_COUNT + OBS_EXTRAS
 
 if SENSOR_COUNT != FAN_INNER_RAYS + 2 * FAN_OUTER_RAYS:  # falla ruidoso
@@ -260,6 +264,13 @@ class WallEEnvV3(WallEEnvV2):
         # Abanico de la observación: denso al frente, abierto a los costados.
         self.fan_angles = build_fan_angles()
         self.fan_meters = np.full(SENSOR_COUNT, LIDAR_MAX_DIST, dtype=np.float32)
+        # Segundo plano de escaneo, a la altura del techo del chasis.
+        # Con el plano bajo solo se sabe que hay algo; comparando los dos
+        # se sabe si ese algo es una pared (bloquea) o una caja baja.
+        self.headroom_meters = np.full(
+            SENSOR_COUNT, LIDAR_MAX_DIST, dtype=np.float32
+        )
+        self.headroom_norm = np.ones(SENSOR_COUNT, dtype=np.float32)
         self.fan_norm = np.ones(SENSOR_COUNT, dtype=np.float32)
         # Máscara del cono frontal: los rayos que cuentan como "al frente".
         self._fan_front_mask = np.abs(self.fan_angles) <= math.radians(
@@ -364,8 +375,14 @@ class WallEEnvV3(WallEEnvV2):
         # en su centro, despeje hacia el objetivo, despeje detrás, velocidad
         # de avance (único extra con signo) y fracción del abanico libre.
         extras_low = [
+            # V5: frente, cercania, rumbo al obstaculo, rumbo libre,
+            # contacto y atasco.
             0.0, 0.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0,
+            # V6: costados, hueco, objetivo, detras, velocidad y abanico libre.
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0,
+            # V7: derrape, tiempo al impacto, techo (frente/izq/der), tipos de
+            # obstaculo y costado libre.
+            -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0,
         ]
 
         obs_low = np.array(
@@ -678,19 +695,33 @@ class WallEEnvV3(WallEEnvV2):
         return min(limite_x, limite_y)
 
     def _scan_lidar(self) -> None:
-        """Escanea el anillo de 72 y el abanico de 36 en una sola pasada.
+        """Escanea dos planos en una sola pasada: suelo y altura de techo.
 
-        El plano de escaneo va a la altura del paragolpes sobre el suelo local
-        (SENSOR_FOOT_Z), no a una altura fija sobre el centro del chasis. Antes
-        el plano quedaba a 0.21 m y un obstáculo de 12 cm era invisible.
+        Plano bajo (SENSOR_FOOT_Z, 6 cm): que hay delante.
+        Plano alto (HEADROOM_FOOT_Z, 34 cm): que hay a la altura del chasis.
+
+        Con un solo plano, una pared de 2 m y una caja de 12 cm se leen igual:
+        las dos son "obstaculo a 1.4 m". Comparando los dos planos aparece la
+        diferencia que importa para decidir:
+
+            bajo si, alto si   -> pared o bloque alto: no se pasa.
+            bajo si, alto no   -> caja baja: se puede trepar o pasar por encima.
+            bajo no, alto si   -> voladizo: se pasa por debajo.
+            ninguno            -> libre.
+
+        El plano alto se lanza aparte y solo para las direcciones donde el
+        plano bajo choco: sin impacto abajo no hay nada que comparar, y
+        lanzar los 36 rayos altos siempre costaba 1.3 ms por paso, que es
+        justo el presupuesto de un tick a 60 Hz en la GUI.
 
         Las distancias se devuelven desde el borde del robot: 0 = tocando.
         """
         pos, quat = self.p.getBasePositionAndOrientation(self.robot)
         yaw = float(self.p.getEulerFromQuaternion(quat)[2])
-        # Altura sobre el suelo local: en llano da SENSOR_FOOT_Z exacto; sobre
-        # una rampa sube con el robot, porque el sensor está atornillado a él.
-        z = max(0.02, pos[2] - self.BASE_Z + SENSOR_FOOT_Z)
+        # Altura sobre el suelo local: en llano da la constante exacta; sobre
+        # una rampa sube con el robot, porque el sensor esta atornillado a el.
+        z_low = max(0.02, pos[2] - self.BASE_Z + SENSOR_FOOT_Z)
+        z_high = max(z_low + 0.05, pos[2] - self.BASE_Z + HEADROOM_FOOT_Z)
 
         n_ring = LIDAR_RAYS
         n_fan = int(self.fan_angles.size)
@@ -700,35 +731,43 @@ class WallEEnvV3(WallEEnvV2):
         tos: list[list[float]] = []
         thetas = np.empty(total, dtype=np.float64)
 
+        def add_ray(theta: float, z: float) -> None:
+            angle = yaw + theta
+            dx, dy = math.cos(angle), math.sin(angle)
+            froms.append(
+                [
+                    pos[0] + dx * LIDAR_ORIGIN_OFFSET,
+                    pos[1] + dy * LIDAR_ORIGIN_OFFSET,
+                    z,
+                ]
+            )
+            tos.append(
+                [
+                    pos[0] + dx * LIDAR_MAX_DIST,
+                    pos[1] + dy * LIDAR_MAX_DIST,
+                    z,
+                ]
+            )
+
         for i in range(n_ring):
             theta = 2.0 * math.pi * i / n_ring
             thetas[i] = theta
-            angle = yaw + theta
-            dx, dy = math.cos(angle), math.sin(angle)
-            froms.append([pos[0] + dx * LIDAR_ORIGIN_OFFSET,
-                          pos[1] + dy * LIDAR_ORIGIN_OFFSET, z])
-            tos.append([pos[0] + dx * LIDAR_MAX_DIST,
-                        pos[1] + dy * LIDAR_MAX_DIST, z])
+            add_ray(theta, z_low)
 
         for j in range(n_fan):
             theta = float(self.fan_angles[j])
             thetas[n_ring + j] = theta
-            angle = yaw + theta
-            dx, dy = math.cos(angle), math.sin(angle)
-            froms.append([pos[0] + dx * LIDAR_ORIGIN_OFFSET,
-                          pos[1] + dy * LIDAR_ORIGIN_OFFSET, z])
-            tos.append([pos[0] + dx * LIDAR_MAX_DIST,
-                        pos[1] + dy * LIDAR_MAX_DIST, z])
+            add_ray(theta, z_low)
 
-        # La exclusión por parentObjectUniqueId NO sirve en esta build. Medido:
+        # La exclusion por parentObjectUniqueId NO sirve en esta build. Medido:
         #   parentLinkIndex=-1 (u omitido) -> el lote entero devuelve (-1, 1.0)
         #   parentLinkIndex=0 o 1         -> excluye el cuerpo, pero depende de
         #                                    que el robot tenga al menos un link
-        # Un lote vacío se lee como "todo libre a 6 m" y WALL-E se come la pared.
+        # Un lote vacio se lee como "todo libre a 6 m" y WALL-E se come la pared.
         # Se saca al robot del broadphase mientras dura el barrido, que es
         # determinista y no depende de la cantidad de links. No hay step de
-        # simulación entre el apagado y el encendido, así que la física no ve
-        # nada raro. Grupo 1 / máscara 0xFFFF es el valor por defecto de
+        # simulacion entre el apagado y el encendido, asi que la fisica no ve
+        # nada raro. Grupo 1 / mascara 0xFFFF es el valor por defecto de
         # createMultiBody en pybullet 3.2.7.
         self.p.setCollisionFilterGroupMask(self.robot, -1, 0, 0)
         try:
@@ -739,22 +778,22 @@ class WallEEnvV3(WallEEnvV2):
         meters = np.empty(total, dtype=np.float32)
         for i in range(total):
             hit = results[i]
-            # Cinturón y tirantes: si alguna build vuelve a ignorar la
-            # exclusión, un impacto contra el propio cuerpo no es distancia.
+            # Cinturon y tirantes: si alguna build vuelve a ignorar la
+            # exclusion, un impacto contra el propio cuerpo no es distancia.
             if int(hit[0]) == self.robot:
                 meters[i] = LIDAR_MAX_DIST
                 continue
 
             frac = float(hit[2])
             if frac >= 1.0:
-                # Sin impacto: espacio libre hasta el alcance máximo. No se le
+                # Sin impacto: espacio libre hasta el alcance maximo. No se le
                 # resta el radio del chasis para que "libre" valga exactamente
                 # LIDAR_MAX_DIST y los umbrales de hueco libre sigan claros.
                 meters[i] = LIDAR_MAX_DIST
                 continue
 
-            # Distancia al obstáculo medida desde el paragolpes, no desde el
-            # centro. Por debajo de 0 el robot ya está penetrando: 0 = tocando.
+            # Distancia al obstaculo medida desde el paragolpes, no desde el
+            # centro. Por debajo de 0 el robot ya esta penetrando: 0 = tocando.
             dist = frac * LIDAR_MAX_DIST - self._body_radius(float(thetas[i]))
             if self._sensor_noise_std > 0.0:
                 dist += float(
@@ -762,18 +801,80 @@ class WallEEnvV3(WallEEnvV2):
                 )
             meters[i] = min(max(dist, 0.0), LIDAR_MAX_DIST)
 
-        self.lidar_meters = meters[:n_ring]
+        low = meters[: n_ring + n_fan]
+        self.lidar_meters = low[:n_ring]
         self.lidar_norm = np.clip(
             1.0 - self.lidar_meters / LIDAR_MAX_DIST, 0.0, 1.0
         ).astype(np.float32)
-        self.fan_meters = meters[n_ring:]
+        self.fan_meters = low[n_ring:]
         self.fan_norm = np.clip(
             1.0 - self.fan_meters / LIDAR_MAX_DIST, 0.0, 1.0
         ).astype(np.float32)
+        self.fan_low_hit = self.fan_meters < LIDAR_MAX_DIST * 0.995
 
-    # ------------------------------------------------------------------ #
-    # Resolución de problemas: geometría útil para decidir
-    # ------------------------------------------------------------------ #
+        # --- plano alto, solo donde el bajo encontro algo ---------------- #
+        # Un rayo alto solo aporta informacion si el rayo bajo de esa misma
+        # direccion choco: hace falta comparar dos lecturas. Si el bajo esta
+        # limpio no hay nada que comparar (o no hay obstaculo, o hay un
+        # voladizo que el robot pasa por debajo igual). Con los 36 rayos
+        # lanzados siempre el barrido costaba 1.3 ms mas y la GUI perdia el
+        # presupuesto de 16.6 ms por tick; con esto, en una arena despejada el
+        # segundo barrido no se hace.
+        self.headroom_meters = np.full(SENSOR_COUNT, LIDAR_MAX_DIST, np.float32)
+        alto_idx = np.nonzero(self.fan_low_hit)[0]
+        if alto_idx.size:
+            froms_alto: list[list[float]] = []
+            tos_alto: list[list[float]] = []
+            for j in alto_idx:
+                angle = yaw + float(self.fan_angles[j])
+                dx, dy = math.cos(angle), math.sin(angle)
+                froms_alto.append(
+                    [
+                        pos[0] + dx * LIDAR_ORIGIN_OFFSET,
+                        pos[1] + dy * LIDAR_ORIGIN_OFFSET,
+                        z_high,
+                    ]
+                )
+                tos_alto.append(
+                    [
+                        pos[0] + dx * LIDAR_MAX_DIST,
+                        pos[1] + dy * LIDAR_MAX_DIST,
+                        z_high,
+                    ]
+                )
+            self.p.setCollisionFilterGroupMask(self.robot, -1, 0, 0)
+            try:
+                alto = self.p.rayTestBatch(
+                    froms_alto, tos_alto, numThreads=LIDAR_THREADS
+                )
+            finally:
+                self.p.setCollisionFilterGroupMask(self.robot, -1, 1, 0xFFFF)
+            for k, j in enumerate(alto_idx):
+                hit = alto[k]
+                if int(hit[0]) == self.robot:
+                    continue
+                frac = float(hit[2])
+                if frac >= 1.0:
+                    continue
+                dist = frac * LIDAR_MAX_DIST - self._body_radius(
+                    float(self.fan_angles[j])
+                )
+                if self._sensor_noise_std > 0.0:
+                    dist += float(
+                        self.np_random.normal(0.0, self._sensor_noise_std)
+                    )
+                self.headroom_meters[j] = min(max(dist, 0.0), LIDAR_MAX_DIST)
+
+        self.headroom_norm = np.clip(
+            1.0 - self.headroom_meters / LIDAR_MAX_DIST, 0.0, 1.0
+        ).astype(np.float32)
+
+        # Semantica por rayo del abanico. Un rayo que toca abajo y no toca
+        # arriba es un obstaculo bajo: se puede trepar.
+        self.fan_high_hit = self.headroom_meters < LIDAR_MAX_DIST * 0.995
+        self.fan_climbable = self.fan_low_hit & ~self.fan_high_hit
+        self.fan_blocking = self.fan_low_hit & self.fan_high_hit
+
     def _nearest_ray(self) -> tuple[int, float]:
         """Rayo (índice) y distancia del obstáculo más cercano de los 72."""
         if self.lidar_meters.size == 0:
@@ -863,18 +964,35 @@ class WallEEnvV3(WallEEnvV2):
             return float(self.lidar_max_dist)
         return float(self.fan_meters[mask].min())
 
-    def _problem_obs(self) -> np.ndarray:
-        """16 valores que describen el problema inmediato del robot.
+    def _head_sector_min(self, lo_deg: float, hi_deg: float) -> float:
+        """Distancia libre minima del plano alto en un sector del abanico."""
+        mask = (self.fan_angles >= math.radians(lo_deg)) & (
+            self.fan_angles <= math.radians(hi_deg)
+        )
+        if not mask.any():
+            return float(self.lidar_max_dist)
+        return float(self.headroom_meters[mask].min())
 
-        Los 8 primeros son los del V5 (compatibles con el modelo viejo);
-        los 8 nuevos describen los costados, el hueco, el rumbo al objetivo,
-        lo que hay detrás y la velocidad real de avance.
+    def _problem_obs(self) -> np.ndarray:
+        """24 valores que describen el problema inmediato del robot.
+
+        Los 8 primeros son los del V5 y los 8 siguientes los del V6, en el
+        mismo orden: los tres bloques se pueden leer por separado. Los 8
+        ultimos son del V7 y describen lo que el robot necesita para entender
+        el entorno en vez de solo reaccionar:
+
+            16 derrape          velocidad lateral en el eje del chasis
+            17 tiempo_impacto   segundos hasta tocar, normalizado a 2 s
+            18-20 techo         despeje del plano alto: frente, izquierda, derecha
+            21 ratio_bajo       fraccion del frente con obstaculo trepable
+            22 ratio_alto       fraccion del frente con obstaculo que bloquea
+            23 costado_libre    -1 = conviene ir a la izquierda, +1 a la derecha
         """
         meters = self.lidar_meters
         max_d = float(self.lidar_max_dist)
-        # "Al frente" es el cono de decisión, no el semicírculo entero: con
-        # ±90° una pared al costado contaba como obstáculo frontal y el robot
-        # frenaba en mitad de la nada.
+        # "Al frente" es el cono de decision, no el semicirculo entero: con
+        # +-90 grados una pared al costado contaba como obstaculo frontal y el
+        # robot frenaba en mitad de la nada.
         front = self.fan_meters[self._fan_front_mask]
         front_min = float(front.min()) if front.size else max_d
         index, nearest = self._nearest_ray()
@@ -883,14 +1001,14 @@ class WallEEnvV3(WallEEnvV2):
         bearing = (bearing + math.pi) % (2.0 * math.pi) - math.pi
         free_sin, free_cos = self._free_direction()
 
-        # --- costados: por dónde se puede escapar ------------------------
+        # --- costados: por donde se puede escapar ------------------------
         libre_izq = self._fan_sector_min(SIDE_MIN_DEG, 90.0)
         libre_der = self._fan_sector_min(-90.0, -SIDE_MIN_DEG)
 
-        # --- hueco más ancho ---------------------------------------------
+        # --- hueco mas ancho ---------------------------------------------
         hueco_ancho, hueco_dist = self._widest_gap()
 
-        # --- rumbo al objetivo: qué hay justo en esa dirección -----------
+        # --- rumbo al objetivo: que hay justo en esa direccion -----------
         pos, quat = self.p.getBasePositionAndOrientation(self.robot)
         yaw = float(self.p.getEulerFromQuaternion(quat)[2])
         goal_bearing = wrap_angle(float(self.goal_angle) - yaw)
@@ -899,7 +1017,7 @@ class WallEEnvV3(WallEEnvV2):
             goal_deg - GOAL_CONE_DEG, goal_deg + GOAL_CONE_DEG
         )
 
-        # --- detrás: el anillo sí llega, el abanico no -------------------
+        # --- detras: el anillo si llega, el abanico no -------------------
         angulos = np.arange(meters.size) * step
         angulos = (angulos + math.pi) % (2.0 * math.pi) - math.pi
         detras_mask = np.abs(angulos) > math.radians(REAR_DEG)
@@ -907,7 +1025,7 @@ class WallEEnvV3(WallEEnvV2):
             float(meters[detras_mask].min()) if detras_mask.any() else max_d
         )
 
-        # --- velocidad real en el eje del chasis ------------------------
+        # --- velocidad real en el eje del chasis -------------------------
         lin_vel, _ = self.p.getBaseVelocity(self.robot)
         vel_adelante = (
             float(lin_vel[0]) * math.cos(yaw) + float(lin_vel[1]) * math.sin(yaw)
@@ -915,8 +1033,52 @@ class WallEEnvV3(WallEEnvV2):
         vel_max = self.max_wheel_speed * 0.09  # rueda de 9 cm
         vel_norm = float(np.clip(vel_adelante / max(vel_max, 1e-6), -1.0, 1.0))
 
-        # --- proporción del abanico que está despejada ------------------
+        # --- proporcion del abanico que esta despejada -------------------
         ratio_libre = float(np.mean(self.fan_meters > FREE_RAY_M))
+
+        # --- segundo plano: que es alto y que se puede pasar -------------
+        head = self.headroom_meters
+        head_front = (
+            float(head[self._fan_front_mask].min())
+            if self._fan_front_mask.any()
+            else max_d
+        )
+        head_izq = self._head_sector_min(SIDE_MIN_DEG, 90.0)
+        head_der = self._head_sector_min(-90.0, -SIDE_MIN_DEG)
+
+        # Fraccion del frente ocupada por cada tipo de obstaculo. Con estos
+        # dos numeros la politica sabe si lo que tiene delante es una pared o
+        # una caja que puede trepar.
+        front_mask = self._fan_front_mask
+        if front_mask.any():
+            total_frente = float(front_mask.sum())
+            ratio_bajo = float(self.fan_climbable[front_mask].sum()) / total_frente
+            ratio_alto = float(self.fan_blocking[front_mask].sum()) / total_frente
+        else:
+            ratio_bajo = 0.0
+            ratio_alto = 0.0
+
+        # --- derrape: velocidad lateral en el eje del chasis -------------
+        vel_lateral = -float(lin_vel[0]) * math.sin(yaw) + float(
+            lin_vel[1]
+        ) * math.cos(yaw)
+        vel_lat_norm = float(
+            np.clip(vel_lateral / max(vel_max, 1e-6), -1.0, 1.0)
+        )
+
+        # --- tiempo hasta el impacto -------------------------------------
+        # front_min en metros, vel_adelante en m/s. Se normaliza a 2 s de
+        # horizonte: 1.0 = sin riesgo, 0.0 = se lo come en el proximo paso.
+        # Es lo que permite frenar progresivo en vez de dar un volantazo.
+        velocidad = abs(float(vel_adelante))
+        if velocidad > 0.02:
+            segundos = max(0.0, float(front_min)) / velocidad
+            tiempo_impacto = float(np.clip(segundos / 2.0, 0.0, 1.0))
+        else:
+            tiempo_impacto = 1.0
+
+        # --- costado mas libre -------------------------------------------
+        diferencia = float(np.clip((libre_der - libre_izq) / max_d, -1.0, 1.0))
 
         return np.array(
             [
@@ -929,7 +1091,7 @@ class WallEEnvV3(WallEEnvV2):
                 free_cos,
                 1.0 if self._contact_flag else 0.0,
                 1.0 if self._stuck_steps >= STUCK_STEPS else 0.0,
-                # --- 8 nuevos -------------------------------------------
+                # --- 8 del V6 -------------------------------------------
                 float(np.clip(1.0 - libre_izq / max_d, 0.0, 1.0)),
                 float(np.clip(1.0 - libre_der / max_d, 0.0, 1.0)),
                 float(np.clip(hueco_ancho / math.pi, 0.0, 1.0)),
@@ -938,13 +1100,19 @@ class WallEEnvV3(WallEEnvV2):
                 float(np.clip(1.0 - trasero / max_d, 0.0, 1.0)),
                 vel_norm,
                 ratio_libre,
+                # --- 8 del V7: entender el entorno ----------------------
+                vel_lat_norm,
+                tiempo_impacto,
+                float(np.clip(1.0 - head_front / max_d, 0.0, 1.0)),
+                float(np.clip(1.0 - head_izq / max_d, 0.0, 1.0)),
+                float(np.clip(1.0 - head_der / max_d, 0.0, 1.0)),
+                ratio_bajo,
+                ratio_alto,
+                diferencia,
             ],
             dtype=np.float32,
         )
 
-    # ------------------------------------------------------------------ #
-    # Observación 58D (14 base + 36 frontales + 8 de resolución)
-    # ------------------------------------------------------------------ #
     def _get_obs(self) -> np.ndarray:
         base_obs = super()._get_obs()  # 14D de V2
         if self._enable_sensors:

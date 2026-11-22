@@ -156,6 +156,11 @@ GRID_COLOR_MAJOR = GRID_MAJOR_RGB
 SHOW_DEBUG_HUD = False
 
 # Camara inicial: WALL-E como protagonista, vista ligeramente elevada.
+# Hasta aca el frente cuenta como "algo delante". Mas lejos es horizonte, no
+# obstaculo: sirve para que el panel no anuncie una pared cuando el robot esta
+# solo en mitad de la arena y lo unico que ve son las paredes del borde.
+FRENTE_CERCA_M = 2.0
+
 CAMERA_DISTANCE = 2.05
 CAMERA_YAW = 42.0
 CAMERA_PITCH = -30.0
@@ -1238,7 +1243,7 @@ class WalleController:
                 )
             )
         for nombre in (
-            "walle_ppo_model_v6.zip",
+            "walle_ppo_model_v7.zip",
             "walle_ppo_model_v5_recovery.zip",
             "walle_ppo_model_v4_lidar.zip",
         ):
@@ -4267,12 +4272,14 @@ class InteractiveWalleApp:
             self.status_var.set(text)
 
     def _refresh_senses(self) -> None:
-        """Traduce la observación del robot a una línea que se pueda leer.
+        """Traduce la observacion del robot a dos lineas que se puedan leer.
 
-        La política ve 66 números; acá se muestran los que explican una
-        decisión: qué tan lejos está el frente, qué hay a cada costado, dónde
-        está el hueco más ancho, qué hay en el rumbo al objetivo, qué hay
-        detrás y a qué velocidad va de verdad.
+        La politica ve 74 numeros; aca se muestran los que explican una
+        decision. La primera linea es el V6: que tan lejos esta el frente, que
+        hay a cada costado, donde esta el hueco mas ancho, que hay en el rumbo
+        al objetivo, a que velocidad va de verdad. La segunda es el V7: que
+        hay a la altura del chasis, o sea si lo que tiene delante es una pared
+        que hay que rodear o una caja baja que puede trepar.
         """
         env = getattr(self.controller, "env", None)
         if env is None or not hasattr(env, "fan_meters"):
@@ -4293,7 +4300,7 @@ class InteractiveWalleApp:
             desde_objetivo = math.degrees(
                 (float(env.goal_angle) - yaw + math.pi) % (2.0 * math.pi) - math.pi
             )
-            # Despeje en el rumbo al objetivo (±20°), relativo al frente.
+            # Despeje en el rumbo al objetivo (+-20 grados), relativo al frente.
             goal_clear = env._fan_sector_min(
                 desde_objetivo - 20.0, desde_objetivo + 20.0
             )
@@ -4301,13 +4308,83 @@ class InteractiveWalleApp:
             vel = float(lin_vel[0]) * math.cos(yaw) + float(lin_vel[1]) * math.sin(yaw)
             libre_pct = 100.0 * float(np.mean(fan > 1.20))
             contacto = " CONTACTO" if getattr(env, "_contact_flag", False) else ""
-            self.senses_var.set(
+            linea_1 = (
                 f"Sentidos · frente {frente:4.2f} m · "
                 f"izq {izq:4.2f} · der {der:4.2f} m · "
                 f"hueco {ancho_deg:3.0f}° a {hueco_m:4.2f} m · "
                 f"objetivo {desde_objetivo:+4.0f}°/{goal_clear:4.2f} m · "
                 f"vel {vel:+.2f} m/s · libre {libre_pct:3.0f}%"
                 f"{contacto}"
+            )
+
+            # --- segunda linea: la lectura del plano alto (V7) ---------- #
+            head = getattr(env, "headroom_meters", None)
+            if head is None:
+                self.senses_var.set(linea_1)
+                return
+            front_mask = getattr(env, "_fan_front_mask", None)
+            if front_mask is None or not bool(np.any(front_mask)):
+                self.senses_var.set(linea_1)
+                return
+
+            techo = float(np.min(np.asarray(head, dtype=np.float32)[front_mask]))
+            trepables = np.asarray(
+                getattr(env, "fan_climbable", np.zeros(0, dtype=bool)), dtype=bool
+            )
+            bloqueantes = np.asarray(
+                getattr(env, "fan_blocking", np.zeros(0, dtype=bool)), dtype=bool
+            )
+
+            # Solo cuenta lo que esta cerca. En una arena vacia el cono frontal
+            # igual toca las paredes del borde a 3-6 m: contarlas daba "40% de
+            # pared" con el robot en mitad de la nada, que es cierto y a la vez
+            # una mentira util. La pregunta es que tiene ENCIMA, no que hay en
+            # el horizonte.
+            cerca = front_mask & (np.asarray(fan, dtype=np.float32) < 2.0)
+            total = float(np.count_nonzero(cerca))
+            if total > 0.0:
+                trepable_pct = (
+                    100.0 * float(np.count_nonzero(trepables[cerca])) / total
+                    if trepables.size == front_mask.size
+                    else 0.0
+                )
+                bloqueante_pct = (
+                    100.0 * float(np.count_nonzero(bloqueantes[cerca])) / total
+                    if bloqueantes.size == front_mask.size
+                    else 0.0
+                )
+            else:
+                trepable_pct = 0.0
+                bloqueante_pct = 0.0
+
+            # El veredicto en una palabra, que es lo que se lee de reojo. Sin
+            # nada a menos de FRENTE_CERCA_M no hay veredicto que dar: el
+            # frente esta libre y punto, aunque el plano alto vea el borde de
+            # la arena al fondo.
+            if frente > FRENTE_CERCA_M:
+                veredicto = "frente libre"
+            elif bloqueante_pct >= 50.0:
+                veredicto = "PARED al frente"
+            elif trepable_pct >= 50.0:
+                veredicto = "caja baja: se trepa"
+            elif techo > FRENTE_CERCA_M:
+                veredicto = "voladizo: pasa por debajo"
+            else:
+                veredicto = "frente libre"
+
+            # Tiempo hasta tocar con la velocidad actual: 0.41 s y 2.4 s son
+            # decisiones distintas aunque la distancia sea la misma.
+            if abs(vel) > 0.02:
+                impacto = max(0.0, frente) / abs(vel)
+                impacto_txt = f"{impacto:4.2f} s"
+            else:
+                impacto_txt = "  --  "
+
+            self.senses_var.set(
+                f"{linea_1}\n"
+                f"Plano alto {techo:4.2f} m · {veredicto} · "
+                f"pared {bloqueante_pct:3.0f}% · trepable {trepable_pct:3.0f}% · "
+                f"impacto {impacto_txt}"
             )
         except Exception:
             pass

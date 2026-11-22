@@ -10,7 +10,7 @@ Simulador Wall-E\
   WALL-E Entrenar Cerebro.bat <- entrenar el cerebro PPO
   WALL-E Robot Real.bat       <- manejar el robot fisico desde el simulador
   interactive_walle.py        <- la GUI y el controlador
-  walle_env_v3.py             <- el entorno V6: observacion de 66 numeros
+  walle_env_v3.py             <- el entorno V7: observacion de 74 numeros
   walle_pybullet.py           <- ata cada entorno a su propio cliente PyBullet
   tools_diag_lidar.py         <- diagnostico del sensor contra la geometria real
   tools_soak_entorno.py       <- banco de fatiga: pasos, memoria, cuerpos vivos
@@ -43,9 +43,10 @@ https://aka.ms/vs/17/release/vc_redist.x64.exe
 
 ## Qué ve el robot
 
-La observación tiene **66 números**: 14 de posición y velocidad, 36 del abanico
-LiDAR y 16 de contexto. Los últimos ocho son los sentidos que se añadieron para
-que dejara de frenar en mitad de la nada:
+La observación tiene **74 números**: 14 de posición y velocidad, 36 del abanico
+LiDAR y 24 de contexto. Los últimos dieciséis son los sentidos que se añadieron
+para que dejara de frenar en mitad de la nada y para que entienda qué tiene
+delante, no solo a qué distancia:
 
 ```
  0-13   posicion, orientacion, velocidad, rumbo al objetivo
@@ -54,7 +55,16 @@ que dejara de frenar en mitad de la nada:
 58-65   costado izq, costado der, ancho del hueco, despeje del hueco,
         despeje hacia el objetivo, despeje detras, velocidad real,
         fraccion del abanico libre
+66-73   derrape lateral, tiempo hasta el impacto, despeje del plano alto
+        (frente/izq/der), fraccion del frente trepable, fraccion del
+        frente que bloquea, costado mas libre
 ```
+
+**Los dos planos de escaneo.** El abanico de 36 se lanza dos veces: a 6 cm del
+suelo y a 34 cm, la altura del chasis. Un rayo que toca abajo y no arriba es un
+obstáculo bajo — una caja de 12 cm, un escalón — y se puede trepar. Un rayo que
+toca en los dos planos es una pared y no se pasa. Con un solo plano las dos
+cosas se leían igual y la política no tenía con qué decidir.
 
 Todo lo que el robot siente se puede leer en la ventana, debajo del título:
 
@@ -70,13 +80,13 @@ de 72 rayos se pinta azul y el abanico de 36 que decide se pinta ámbar encima.
 
 | Archivo | Pasos | Estado |
 |---|---|---|
-| `walle_ppo_model_v6.zip` | — | No está en el repo: lo genera el entrenamiento. Observación de 66 |
+| `walle_ppo_model_v7.zip` | — | No está en el repo: lo genera el entrenamiento. Observación de 74 |
 | `walle_ppo_model_v5_recovery.zip` | 1.3M heredados del V4 | Observación de 58: no carga con el entorno actual |
 | `walle_ppo_model_v4_lidar.zip` | 1 303 520 | La base del anterior. Navega bien |
 | `walle_ppo_model_v3_explorer.zip` | — | Histórico, por si hay que comparar |
 
 Los tres que vienen en el repo son de 58 números, así que con la observación de
-66 actual **ninguno encaja**: hasta que termine el primer entrenamiento V6, el
+74 actual **ninguno encaja**: hasta que termine el primer entrenamiento V7, el
 modo PPO avisa y se queda en manual. Es lo esperado, no un fallo.
 
 El cargador no tiene dimensiones escritas a mano: prueba los modelos de
@@ -123,8 +133,13 @@ El guardián solo hace algo si se cumplen tres cosas: no existe
 un checkpoint que reanudar (o no hay modelo final todavía). Si el entrenamiento
 terminó de verdad, no toca nada; para volver a entrenar hay que borrar la marca.
 
+Hay una cuarta: si hay un `train_walle*` vivo pero el log lleva **30 minutos sin
+escribir**, se considera colgado y lo reanuda igual. Un cuelgue del barrido de
+rayos deja el proceso ahí, sin CPU y sin errores, y sin esta comprobación el
+guardián lo daría por bueno durante horas.
+
 Los checkpoints se guardan con sus estadísticas de `VecNormalize`
-(`walle_v6_NNNNNN_steps_vecnormalize.pkl`). Si el `.pkl` no está —los anteriores
+(`walle_v7_NNNNNN_steps_vecnormalize.pkl`). Si el `.pkl` no está —los anteriores
 a esta versión no lo tienen— el log avisa y el crítico arranca con la escala
 cruda: se ve en `ep_rew_mean` dando un salto los primeros miles de pasos.
 

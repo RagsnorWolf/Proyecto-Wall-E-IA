@@ -100,12 +100,17 @@ WALL-E Simulador Robot.bat    abre la GUI
 WALL-E Entrenar Cerebro.bat   entrena el PPO
 WALL-E Robot Real.bat         manda las órdenes al ESP32 por WiFi
 interactive_walle.py          GUI, chat y controlador
-walle_env_v3.py               entorno V6, observación de 66 números
+walle_env_v3.py               entorno V7, observación de 74 números
+walle_look.py                 paleta y materiales, única fuente de color
+walle_piezas.py               24 piezas de color sólido desde la malla
+tools_vista_previa.py         capturas headless a capturas\
 train_walle_v5.py             entrenamiento
 transplant_v4_to_v5.py        trasplante de pesos V4 → V5
 models\                       las políticas entrenadas
 material_0.png                textura del robot, 2048×2048
 walle_visual.obj              la malla
+walle_color_parts\            las 24 piezas de color sólido
+capturas\                     PNGs de verificación del aspecto
 ```
 
 ### 3.3 `Asistente IA Wall-E`
@@ -227,8 +232,8 @@ docs(agente): puesta en marcha con Ollama
 | Hecho | Verificación |
 |---|---|
 | Modo manual | avanzó 0,95 m de 1,00 · giró 43° de 45° |
-| Modo PPO | carga `RecurrentPPO (LSTM)`, obs 66D, decide y mueve |
-| Entrenamiento | 1,2 M pasos, ~100 fps, modelo en `models\walle_ppo_model_v6.zip` |
+| Modo PPO | carga `RecurrentPPO (LSTM)`, obs 74D, decide y mueve |
+| Entrenamiento | 1,2 M pasos, ~100 fps, modelo en `models\walle_ppo_model_v7.zip` |
 | GUI | 59 FPS, textura aplicada, sin ejes ni panel gris |
 | Trasplante V4 → V5 | 0,000000 de diferencia en 60 pasos |
 | Sensor LiDAR | error < 1 mm desde el paragolpes en 5 posiciones |

@@ -13,7 +13,7 @@
 #   2. No hay ningun proceso train_walle* corriendo
 #   3. Hay algo que reanudar (un checkpoint) o no hay modelo final todavia
 #
-# Lo que NO mira: que exista models\walle_ppo_model_v6.zip. Ese archivo viene
+# Lo que NO mira: que exista models\walle_ppo_model_v7.zip. Ese archivo viene
 # en el repo, asi que mirarlo apagaba el guardian para siempre: decia
 # "se considera terminado" el primer dia y nunca reanudaba nada. Lo que manda
 # es la marca de terminacion, que solo escribe el entrenador al acabar.
@@ -32,9 +32,9 @@ $ErrorActionPreference = "Stop"
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Modelos = Join-Path $Raiz "models"
 $Marca = Join-Path $Modelos "ENTRENAMIENTO_COMPLETO.txt"
-$Final = Join-Path $Modelos "walle_ppo_model_v6.zip"
-$Log = Join-Path $Raiz "entrenamiento_v6.log"
-$LogErr = Join-Path $Raiz "entrenamiento_v6_err.log"
+$Final = Join-Path $Modelos "walle_ppo_model_v7.zip"
+$Log = Join-Path $Raiz "entrenamiento_v7.log"
+$LogErr = Join-Path $Raiz "entrenamiento_v7_err.log"
 $Python = Join-Path $Raiz ".venv\Scripts\python.exe"
 
 if (-not (Test-Path $Python)) {
@@ -80,7 +80,7 @@ if ($corriendo.Count -gt 0) {
 $checkpoints = @()
 if (Test-Path (Join-Path $Modelos "checkpoints")) {
     $checkpoints = @(
-        Get-ChildItem (Join-Path $Modelos "checkpoints") -Filter "walle_v6_*.zip" |
+        Get-ChildItem (Join-Path $Modelos "checkpoints") -Filter "walle_v7_*.zip" |
             Sort-Object LastWriteTime -Descending
     )
 }

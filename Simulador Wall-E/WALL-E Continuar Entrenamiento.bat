@@ -12,7 +12,7 @@ echo ========================================
 echo.
 echo Revisa tres cosas antes de lanzar:
 echo   1. No existe models\ENTRENAMIENTO_COMPLETO.txt
-echo   2. No existe models\walle_ppo_model_v6.zip
+echo   2. No existe models\walle_ppo_model_v7.zip
 echo   3. No hay ningun train_walle corriendo
 echo.
 echo Si el entrenamiento ya termino, no hace nada.

@@ -46,7 +46,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from walle_env_v3 import OBS_DIM, WallEEnvV3
 
-MODEL_NAME = "walle_ppo_model_v6.zip"
+MODEL_NAME = "walle_ppo_model_v7.zip"
 
 
 def make_env(seed: int, stage: int = 3, obstacle_count: int = 8):
@@ -78,6 +78,29 @@ def make_env(seed: int, stage: int = 3, obstacle_count: int = 8):
         return Monitor(env)
 
     return _init
+
+
+def _obs_dim_del_zip(ruta: str) -> int | None:
+    """Dimension de observacion con la que se entreno un checkpoint.
+
+    SB3 guarda la metadata del entorno en el `data` del .zip. Leerla antes de
+    cargar evita el error de forma que deja el entrenamiento a medias: cuando
+    la observacion cambia de tamano, `RecurrentPPO.load` levanta ValueError y
+    el proceso muere en vez de arrancar de cero.
+    """
+    try:
+        import json
+        import zipfile
+
+        with zipfile.ZipFile(ruta) as paquete:
+            datos = json.loads(paquete.read("data"))
+        forma = datos["observation_space"]["shape"]
+        dimension = 1
+        for valor in forma:
+            dimension *= int(valor)
+        return dimension
+    except Exception:
+        return None
 
 
 def main() -> None:
@@ -217,10 +240,23 @@ def main() -> None:
             candidatos = [
                 os.path.join(ckpt_dir, nombre)
                 for nombre in os.listdir(ckpt_dir)
-                if nombre.endswith(".zip") and nombre.startswith("walle_v6_")
+                if nombre.endswith(".zip") and nombre.startswith("walle_v7_")
             ]
-        if candidatos:
-            args.resume = max(candidatos, key=os.path.getmtime)
+        # Un checkpoint de otra version de observacion no se puede cargar:
+        # la red tiene otra forma de entrada. Se descarta antes de intentar.
+        compatibles = [
+            ruta
+            for ruta in candidatos
+            if _obs_dim_del_zip(ruta) in (None, OBS_DIM)
+        ]
+        descartados = len(candidatos) - len(compatibles)
+        if descartados:
+            print(
+                f"[TRAIN_V5] {descartados} checkpoint(s) de otra observacion "
+                f"descartados (se busca obs {OBS_DIM}D)."
+            )
+        if compatibles:
+            args.resume = max(compatibles, key=os.path.getmtime)
             print(f"[TRAIN_V5] auto_resume: {os.path.basename(args.resume)}")
 
     # --- Estadísticas de normalización: guardar y recuperar ------------- #
@@ -233,9 +269,18 @@ def main() -> None:
     #
     # SB3 guarda el .pkl junto al checkpoint si se le pide; acá se recupera.
     if args.resume and os.path.exists(args.resume):
+        dimension = _obs_dim_del_zip(args.resume)
+        if dimension is not None and dimension != OBS_DIM:
+            print(
+                f"[TRAIN_V5] El checkpoint {os.path.basename(args.resume)} "
+                f"se entreno con obs {dimension}D y este entorno usa "
+                f"{OBS_DIM}D. Se arranca de cero."
+            )
+            args.resume = None
+    if args.resume and os.path.exists(args.resume):
         print(f"[TRAIN_V5] Cargando modelo existente: {args.resume}")
         # El .pkl no siempre se llama igual que el .zip: CheckpointCallback lo
-        # guarda como `walle_v6_vecnormalize_490000_steps.pkl`, con el paso en
+        # guarda como `walle_v7_vecnormalize_490000_steps.pkl`, con el paso en
         # medio. Se prueban los dos nombres y, si no, se busca el pkl que lleve
         # el mismo numero de pasos en la misma carpeta.
         pkl = args.resume[: -len(".zip")] + "_vecnormalize.pkl"
@@ -320,7 +365,7 @@ def main() -> None:
         # trabajo perdido como mucho.
         save_freq=max(1, 10000 // max(1, env.num_envs)),
         save_path=checkpoint_dir,
-        name_prefix="walle_v6",
+        name_prefix="walle_v7",
         save_replay_buffer=False,
         # Sin esto, cada reanudación reinicia la media y la varianza del
         # retorno y el crítico recibe un salto de escala que rompe la política.

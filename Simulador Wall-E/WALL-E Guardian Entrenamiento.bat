@@ -14,7 +14,7 @@ echo entrenamiento sigue vivo. Si murio por un reinicio, lo reanuda
 echo desde el ultimo checkpoint.
 echo.
 echo Se detiene solo cuando aparece models\ENTRENAMIENTO_COMPLETO.txt
-echo o models\walle_ppo_model_v6.zip.
+echo o models\walle_ppo_model_v7.zip.
 echo.
 echo Usa: %~nx0 instalar   ^|   %~nx0 quitar   ^|   %~nx0 estado
 echo.

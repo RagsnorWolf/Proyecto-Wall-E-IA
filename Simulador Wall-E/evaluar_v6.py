@@ -1,5 +1,5 @@
 """
-evaluar_v6.py · Banco de pruebas del cerebro (observación de 66 números)
+evaluar_v6.py · Banco de pruebas del cerebro (observación de 74 números)
 
 Entrena que el modelo aprenda; esto mide si aprendió. Corre N episodios con
 el mismo conjunto de semillas para todos los modelos y saca una tabla que se
@@ -17,10 +17,10 @@ Mide lo que importa para el robot real:
   velocidad media     m/s reales sobre el eje del chasis
 
 Uso:
-    python evaluar_v6.py                                  # modelo v6, 10 episodios
-    python evaluar_v6.py --model models/walle_ppo_model_v6.zip
+    python evaluar_v6.py                                  # modelo v7, 10 episodios
+    python evaluar_v6.py --model models/walle_ppo_model_v7.zip
     python evaluar_v6.py --episodes 20 --obstacles 12
-    python evaluar_v6.py --compare v6 v5                  # dos modelos, mismas semillas
+    python evaluar_v6.py --compare v7 v6                  # dos modelos, mismas semillas
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from stable_baselines3 import PPO  # noqa: E402
 from walle_env_v3 import OBS_DIM, WallEEnvV3  # noqa: E402
 
 MODELOS = {
+    "v7": "walle_ppo_model_v7.zip",
     "v6": "walle_ppo_model_v6.zip",
     "v5": "walle_ppo_model_v5_recovery.zip",
     "v4": "walle_ppo_model_v4_lidar.zip",
@@ -177,7 +178,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Banco de pruebas del cerebro")
     parser.add_argument(
         "--model", type=str, default="",
-        help="ruta al .zip; por defecto models/walle_ppo_model_v6.zip",
+        help="ruta al .zip; por defecto models/walle_ppo_model_v7.zip",
     )
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--obstacles", type=int, default=8)
@@ -198,7 +199,7 @@ def main() -> int:
             print("No hay ningún modelo de los pedidos en models\\.")
             return 1
     else:
-        ruta = Path(args.model) if args.model else modelos_dir / MODELOS["v6"]
+        ruta = Path(args.model) if args.model else modelos_dir / MODELOS["v7"]
         if not ruta.exists():
             print(f"No encuentro {ruta}.")
             return 1
@@ -218,7 +219,14 @@ def main() -> int:
     print(cabecera)
     print("-" * len(cabecera))
     for nombre, ruta in candidatos:
-        filas = evaluar(ruta, args.episodes, args.obstacles)
+        # Un modelo de otra observacion no se puede comparar en este entorno:
+        # la red tiene otra forma de entrada. Se anota la fila y se sigue, en
+        # vez de matar la tabla entera por el primer .zip viejo de la lista.
+        try:
+            filas = evaluar(ruta, args.episodes, args.obstacles)
+        except SystemExit as exc:
+            print(f"{nombre:<22} {str(exc)}")
+            continue
         print(resumir(nombre, filas))
     print()
     print("dist. neta y camino en metros · t. contacto en % de pasos")
