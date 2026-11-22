@@ -57,9 +57,24 @@ $corriendo = @(
         Where-Object { $_.CommandLine -like "*train_walle*" }
 )
 if ($corriendo.Count -gt 0) {
-    Escribir ("ya hay un entrenamiento corriendo (PID " +
-        (($corriendo | ForEach-Object { $_.ProcessId }) -join ", ") + "). No hago nada.")
-    exit 0
+    # Un proceso vivo no siempre es un proceso trabajando: el barrido de rayos
+    # se cuelga cada tanto y deja el python ahi, sin CPU y sin escribir. Si el
+    # log lleva media hora quieto, se da por muerto y se reanuda. Con el
+    # entrenamiento sano una iteracion tarda entre 30 s y 4 min.
+    $minutos_quieto = 30
+    $ultima = if (Test-Path $Log) { (Get-Item $Log).LastWriteTime } else { Get-Date }
+    $quieto = ((Get-Date) - $ultima).TotalMinutes
+    if ($quieto -lt $minutos_quieto) {
+        Escribir ("ya hay un entrenamiento corriendo (PID " +
+            (($corriendo | ForEach-Object { $_.ProcessId }) -join ", ") +
+            "), log escrito hace $([math]::Round($quieto, 1)) min. No hago nada.")
+        exit 0
+    }
+    Escribir ("el entrenamiento lleva $([math]::Round($quieto, 1)) min sin escribir: colgado. Lo mato y reanudo.")
+    $corriendo | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 3
 }
 
 $checkpoints = @()
