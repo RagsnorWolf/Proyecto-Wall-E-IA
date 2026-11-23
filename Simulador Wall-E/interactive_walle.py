@@ -2990,21 +2990,29 @@ def build_scene(env: WallEEnv) -> None:
     )
     p.changeDynamics(env.plane, -1, lateralFriction=1.0)
 
-    # Cuadricula de 1 m; cada 5 m una linea algo mas marcada. Se dibuja a
-    # 6 mm del piso para que no compita con el abanico LiDAR, que va a 3 cm.
-    for index in range(-arena, arena + 1):
-        major = index % 5 == 0
+    # Cuadricula de 2 m; cada 10 m una linea mas marcada.
+    #
+    # Estaba a 1 m y el resultado era moire: en OpenGL2 `addUserDebugLine`
+    # dibuja una linea de un pixel, sin antialias, y con 49 lineas por eje
+    # casi paralelas a la camara el piso se llenaba de bandas que se mueven al
+    # orbitar. Con paso 2 m son 25 por eje y desaparece. El ancho sube porque
+    # una linea de 1 px a 4 m de distancia se pierde entre los pixeles.
+    #
+    # Va a 12 mm del piso: por debajo del abanico bajo (6 cm) y lo bastante
+    # lejos del suelo para que el z-buffer no la haga parpadear.
+    for index in range(-arena, arena + 1, 2):
+        major = index % 10 == 0
         color = GRID_COLOR_MAJOR if major else GRID_COLOR_MINOR
-        width = 1.3 if major else 0.9
+        width = 2.0 if major else 1.4
         p.addUserDebugLine(
-            [float(index), -float(arena), 0.006],
-            [float(index), float(arena), 0.006],
+            [float(index), -float(arena), 0.012],
+            [float(index), float(arena), 0.012],
             lineColorRGB=list(color),
             lineWidth=width,
         )
         p.addUserDebugLine(
-            [-float(arena), float(index), 0.006],
-            [float(arena), float(index), 0.006],
+            [-float(arena), float(index), 0.012],
+            [float(arena), float(index), 0.012],
             lineColorRGB=list(color),
             lineWidth=width,
         )

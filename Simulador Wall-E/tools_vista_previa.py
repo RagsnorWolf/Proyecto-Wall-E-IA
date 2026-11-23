@@ -175,6 +175,7 @@ def capturar(
     pitch: float,
     ancho: int,
     alto: int,
+    renderer: int = p.ER_TINY_RENDERER,
 ) -> None:
     view = p.computeViewMatrixFromYawPitchRoll(
         cameraTargetPosition=list(objetivo),
@@ -190,20 +191,28 @@ def capturar(
         nearVal=0.05,
         farVal=60.0,
     )
+    # Con el renderer por hardware (cliente GUI) las luces de `getCameraImage`
+    # se ignoran: manda la luz del visor y el resultado es lo que ve el usuario.
+    # Con TINY_RENDERER hay que pasarlas, o la imagen sale negra.
+    extra = {}
+    if renderer == p.ER_TINY_RENDERER:
+        extra = dict(
+            lightDirection=[-0.45, 0.35, 0.82],
+            lightColor=[1.0, 1.0, 1.0],
+            lightDistance=12.0,
+            lightAmbientCoeff=0.55,
+            lightDiffuseCoeff=0.75,
+            lightSpecularCoeff=0.25,
+            shadow=1,
+        )
     _w, _h, rgba, _depth, _seg = p.getCameraImage(
         width=ancho,
         height=alto,
         viewMatrix=view,
         projectionMatrix=proj,
-        renderer=p.ER_TINY_RENDERER,
-        lightDirection=[-0.45, 0.35, 0.82],
-        lightColor=[1.0, 1.0, 1.0],
-        lightDistance=12.0,
-        lightAmbientCoeff=0.55,
-        lightDiffuseCoeff=0.75,
-        lightSpecularCoeff=0.25,
-        shadow=1,
+        renderer=renderer,
         flags=p.ER_NO_SEGMENTATION_MASK,
+        **extra,
     )
     guardar_png(ruta, rgba, ancho, alto)
 
@@ -260,6 +269,15 @@ def main() -> int:
         "--out", default=str(SCRIPT_DIR / "capturas"), help="Carpeta de salida"
     )
     parser.add_argument("--size", type=int, default=800, help="Ancho en pixeles")
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help=(
+            "Renderiza con OpenGL2 de verdad (abre la ventana de PyBullet). "
+            "Sin esta bandera usa TINY_RENDERER: mas rapido, pero las sombras "
+            "salen con bandas y el especular no es el de la GUI."
+        ),
+    )
     args = parser.parse_args()
 
     ancho = int(args.size)
@@ -269,7 +287,17 @@ def main() -> int:
     piezas = cargar_piezas()
     print(f"[VISTA] {len(piezas)} piezas de color")
 
-    p.connect(p.DIRECT)
+    if args.gui:
+        # El renderer por hardware necesita el cliente GUI: en DIRECT el FBO no
+        # existe y `getCameraImage` devuelve una imagen negra. Se pide OpenGL2
+        # porque es el que funciona en esta maquina; OpenGL3 se cuelga al
+        # cargar el plano.
+        p.connect(p.GUI, options="--opengl2 --width=800 --height=600")
+        renderer = p.ER_BULLET_HARDWARE_OPENGL
+        print("[VISTA] renderer: OpenGL2 (ventana)")
+    else:
+        p.connect(p.DIRECT)
+        renderer = p.ER_TINY_RENDERER
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0.0, 0.0, -9.81)
     p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
@@ -289,6 +317,7 @@ def main() -> int:
             pitch,
             ancho,
             alto,
+            renderer,
         )
 
     p.disconnect()

@@ -108,11 +108,16 @@ def main() -> None:
     # PyBullet. OJO: no tocar OMP_NUM_THREADS — pybullet pide numThreads=4 en
     # el barrido de rayos y si OpenMP queda con 1 hilo el worker muere.
     #
-    # Con 2 hilos el backward del LSTM se comía 27 s por iteración. Medido en
-    # este equipo (Ryzen 5 3400G, 8 lógicos): 6 hilos bajan la iteración de
-    # 2048 pasos de ~35 s a ~22 s. Se deja aire para los dos entornos.
+    # Dos hilos, no seis. Con `n_steps` de 1024 y dos o cuatro entornos el
+    # batch que llega al LSTM es de 2 a 4 muestras: repartir eso entre 6 hilos
+    # cuesta mas en sincronizar que en multiplicar, y ademas revienta. Medido
+    # en este equipo (Ryzen 5 3400G, 8 logicos): con 6 hilos el proceso murio
+    # con `0xC0000005` dentro de `torch.nn.modules.rnn.forward` dos veces, sin
+    # traceback de Python. Con 2 hilos cierra la misma iteracion en 55-80 s sin
+    # caerse. La velocidad que se pierde en el backward se recupera en no
+    # tener que relanzar desde el ultimo checkpoint.
     _logical = os.cpu_count() or 4
-    torch.set_num_threads(max(2, min(6, _logical - 2)))
+    torch.set_num_threads(2)
     print(f"[TRAIN_V5] Hilos de torch: {torch.get_num_threads()} de {_logical} lógicos")
 
     parser = argparse.ArgumentParser(
@@ -299,9 +304,37 @@ def main() -> None:
             if candidatos_pkl:
                 pkl = candidatos_pkl[-1]
         if os.path.exists(pkl):
-            env = VecNormalize.load(pkl, env.venv)
-            env.training = True
-            print(f"[TRAIN_V5] Estadísticas de recompensa recuperadas: {pkl}")
+            # `VecNormalize.load` devuelve un envoltorio que hace el paso tres
+            # veces mas lento: medido con este entorno, 2048 pasos tardan 55 s
+            # con un VecNormalize nuevo, 80 s trasladando `ret_rms` a mano y
+            # mas de 180 s despues de `load`. Con `load` el primer bloque de
+            # metricas no llegaba a escribirse nunca y parecia que el
+            # entrenamiento estaba colgado.
+            #
+            # Lo unico que hace falta recuperar es `ret_rms`, la media movil
+            # del retorno, que es lo que calibra el critico: con norm_obs=False
+            # las estadisticas de observacion ni se usan. Se traslada a mano.
+            try:
+                import pickle
+
+                with open(pkl, "rb") as archivo:
+                    viejo = pickle.load(archivo)
+                ret_rms = getattr(viejo, "ret_rms", None)
+                if ret_rms is None and isinstance(viejo, dict):
+                    ret_rms = viejo.get("ret_rms")
+                if ret_rms is not None:
+                    env.ret_rms = ret_rms
+                    print(
+                        f"[TRAIN_V5] Estadísticas de recompensa recuperadas: "
+                        f"{pkl} (media {ret_rms.mean:.2f})"
+                    )
+                else:
+                    print(
+                        "[TRAIN_V5] AVISO: el .pkl no trae ret_rms. Las "
+                        "estadísticas arrancan de cero."
+                    )
+            except Exception as error:
+                print(f"[TRAIN_V5] AVISO: no pude leer {pkl}: {error}")
         else:
             print(
                 "[TRAIN_V5] AVISO: no hay .pkl de VecNormalize para este "

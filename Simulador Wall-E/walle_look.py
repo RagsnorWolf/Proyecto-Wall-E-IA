@@ -109,24 +109,38 @@ def body_palette(
 # --------------------------------------------------------------------------- #
 # Estetica Isaac Sim: fondo casi negro, suelo grafito y geometria neutra.
 # El contraste lo dan los materiales, no los colores fuertes.
-SKY_RGB = (0.105, 0.108, 0.122)
-GROUND_RGBA = (0.175, 0.178, 0.195, 1.0)
-GROUND_SPECULAR = (0.045, 0.045, 0.055)
-GRID_MINOR_RGB = (0.255, 0.260, 0.280)
-GRID_MAJOR_RGB = (0.395, 0.400, 0.425)
-WALL_RGBA = (0.245, 0.248, 0.268, 1.0)
-WALL_SPECULAR = (0.060, 0.060, 0.070)
+#
+# El fondo tiene que quedar POR DEBAJO del suelo o el horizonte desaparece y
+# el viewport se lee como una mancha. Con el suelo en 0.20 y el fondo en 0.085
+# la linea donde termina la arena se ve sin necesidad de paredes claras.
+SKY_RGB = (0.085, 0.088, 0.100)
+GROUND_RGBA = (0.200, 0.204, 0.222, 1.0)
+# Un especular algo mas alto que el difuso hace que el piso devuelva un brillo
+# tenue y las patas del robot se apoyen: sin el, el suelo es una lamina plana.
+GROUND_SPECULAR = (0.085, 0.085, 0.100)
+# La cuadricula va un escalon por encima del suelo, no dos: si brilla mas que
+# los solidos, el piso se come la escena.
+GRID_MINOR_RGB = (0.268, 0.272, 0.295)
+GRID_MAJOR_RGB = (0.370, 0.376, 0.405)
+WALL_RGBA = (0.150, 0.153, 0.170, 1.0)
+WALL_SPECULAR = (0.070, 0.070, 0.082)
 # Borde de la arena: una franja mas clara que separa el piso de la nada.
-BORDER_RGBA = (0.320, 0.325, 0.350, 1.0)
+BORDER_RGBA = (0.395, 0.400, 0.430, 1.0)
 
 # Solidos de la escena. Familia calida-neutra para que el ambar del LiDAR
 # siga siendo el color mas caliente del viewport.
+#
+# Los tres primeros tonos son la escala de grises de un almacen: yeso, piedra
+# y hormigon. El cuarto es el unico calido y esta reservado para que un solido
+# se distinga de otro de un vistazo. El ultimo, grafito, se usa cuando el
+# cuerpo esta lejos del robot y conviene que se hunda en el fondo.
 SOLID_PALETTE = (
-    (0.760, 0.745, 0.710, 1.0),   # yeso claro
-    (0.615, 0.600, 0.575, 1.0),   # piedra
-    (0.470, 0.455, 0.440, 1.0),   # hormigon
-    (0.800, 0.630, 0.330, 1.0),   # oxido claro, el unico calido
-    (0.330, 0.320, 0.315, 1.0),   # grafito
+    (0.690, 0.676, 0.645, 1.0),   # yeso
+    (0.545, 0.532, 0.510, 1.0),   # piedra
+    (0.395, 0.388, 0.378, 1.0),   # hormigon
+    (0.735, 0.505, 0.235, 1.0),   # oxido, el unico calido
+    (0.255, 0.252, 0.258, 1.0),   # grafito
+    (0.470, 0.505, 0.545, 1.0),   # acero azulado, para romper la escala calida
 )
 SOLID_SPECULAR = (0.110, 0.105, 0.095)
 
