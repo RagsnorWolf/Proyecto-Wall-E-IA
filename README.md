@@ -68,7 +68,7 @@ WALL-E Simulador Robot.bat    abre la GUI
 WALL-E Entrenar Cerebro.bat   entrena el PPO
 WALL-E Robot Real.bat         manda las órdenes al ESP32
 interactive_walle.py          GUI, chat y controlador
-walle_env_v3.py               entorno V5, observación de 58 números
+walle_env_v3.py               entorno V7, observación de 74 números
 train_walle_v5.py             entrenamiento
 transplant_v4_to_v5.py        trasplante de pesos V4 → V5
 transplant_v6_to_v7.py        trasplante de pesos V6 -> V7 (620k pasos conservados)
@@ -80,8 +80,10 @@ walle_visual.obj              la malla
 **Los tres modos:** manual (chat en castellano), PPO (autónomo) y robot real
 (por WiFi al ESP32).
 
-La observación de 58 números son 14 base + 36 rayos LiDAR frontales + 8 de
-resolución de atascos. Los primeros 50 son exactamente los del V4, por eso el
+La observación de 74 números son 14 base + 36 rayos del abanico + 24 de
+contexto. El abanico se lanza en dos planos, bajo (6 cm) y alto (34 cm): un rayo
+que toca abajo y no arriba es una caja que se trepa; uno que toca en los dos es
+pared. Los primeros 66 son los del V6 y los primeros 58 los del V5, por eso el
 trasplante de pesos funciona sin reentrenar de cero.
 
 ### Trampas del entorno que ya costaron caro
@@ -150,8 +152,8 @@ para que quien la abra entienda dónde está parado.
 | Enlace PC ↔ ESP32 ↔ UNO | ✅ verificado con loopback |
 | Consola de control | ✅ 97 órdenes, 0 fallos |
 | Simulador, modo manual | ✅ 0,95 m de 1,00 · 43° de 45° |
-| Simulador, modo PPO | ✅ carga y decide (obs 58D) |
-| Entrenamiento | ✅ 4096 pasos, 104 fps |
+| Simulador, modo PPO | OK carga y decide (obs 74D, 620k trasplantados) |
+| Entrenamiento | AVISO reanuda y avanza, pero torch cae con access violation |
 | GUI | ✅ 59 FPS, textura aplicada |
 | Robot autónomo real | ⏳ falta el sensor de distancia |
 

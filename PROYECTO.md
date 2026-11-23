@@ -288,7 +288,7 @@ UNO D13 (TX) ──[1 kΩ]──┬── ESP32 GPIO16 (RX2)
 Divisor de tensión obligatorio: el UNO transmite a 5 V y el ESP32 tolera 3,3 V.
 ESP32 → UNO (GPIO17 → D12) va directo.
 
-### 6.2 El entorno del simulador (V5)
+### 6.2 El entorno del simulador (V7)
 
 ```
 Observación: 74 números
@@ -458,6 +458,7 @@ Estas están resueltas. Si alguien las vuelve a tocar, se rompe.
 | Recompensa sin normalizar | Retorno ±200 contra una cabeza de valor que no lo sigue (`value_loss` entre 5 y 130, oscilando) | `VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)` |
 | `rich` con stdout redirigido | Se bloquea | `progress_bar=False` |
 | `torch.set_num_threads` alto en inferencia | 1,5 s por paso | 1 hilo en inferencia, núcleos−2 en entrenamiento |
+| El LSTM de esta build de torch con rollout largo | `0xC0000005` dentro de `torch.nn.modules.rnn.forward` y en el `backward` de `ppo_recurrent.py`, sin traceback de Python. Medido: cae con 6 hilos y con 2, con 4 entornos y con 2. Una iteración de 2048 pasos sí completa (55-80 s); la segunda ya no. Con `mkldnn` apagado no crashea pero se cuelga | No pelear: el cerebro que va al robot es el reactivo. El PPO queda para cuando se cambie de máquina o de build de torch |
 | `COV_ENABLE_RGB_AXES` en PyBullet 3.2.7 | No existe, tira excepción | `getattr(p, "COV_ENABLE_RGB_AXES", None)` |
 | Un proceso GUI colgado | Deja ventana huérfana y bloquea el siguiente arranque | El `.bat` limpia antes de lanzar |
 | `PYTHONUTF8` sin definir | Un acento en un `print` mata el proceso | Siempre `PYTHONUTF8=1` |
@@ -529,15 +530,15 @@ de entrenamiento, que miente cuando cambia el entorno.
 | Consola de control | ✅ | 97 órdenes, 97 ACK, 0 reintentos, 0 timeouts |
 | Cadena simulador → UDP → puente | ✅ | 0 errores, parada limpia al cerrar |
 | Modo manual del simulador | ✅ | Avanzó 0,95 m de 1,00 · giró 43° de 45° |
-| Modo PPO del simulador | ⚠️ avisa y sigue en manual | Los tres `.zip` del repo son de 58 números y la observación actual es de 74: el cargador los prueba todos, ninguno encaja y lo dice |
-| Entrenamiento | ✅ | 8192 pasos con 2 entornos (`Conexiones PyBullet: [0, 1]`) y 20 000 pasos de banco de fatiga con el RSS plano en 271 MB |
+| Modo PPO del simulador | OK carga y decide | `walle_ppo_model_v7.zip`: 620 000 pasos trasplantados del V6 a la observación de 74, recargado desde el `.zip` y el `.pkl` como lo hace `train_walle_v5`; 111 de 120 pasos avanza |
+| Entrenamiento | ⚠️ arranca y avanza, pero torch lo tumba | Reanuda desde 620 000 y completa una iteración de 2048 pasos en 55-80 s; en la siguiente muere con `0xC0000005` en el LSTM. Ver la trampa en 6.3 |
 | GUI | ✅ | 59 FPS estables, textura aplicada, sin ejes |
 
 ### Lo que está pendiente
 
 | Pendiente | Por qué | Desbloquea |
 |---|---|---|
-| **La corrida larga de 1,2 M** | El entorno ya soporta dos clientes y no fuga memoria; falta dejarla correr las horas que pide (~23 fps con LSTM en CPU) | Un `walle_ppo_model_v7.zip` real, y con él el modo PPO deja de caer a manual |
+| **Terminar los 580 000 pasos que faltan** | El entorno y el trasplante ya están: lo que falta es que torch aguante. Cae con `access violation` en el LSTM cuando el rollout se alarga | Un v7 entrenado de verdad, no solo trasplantado |
 | **Sensor de distancia real** | La política usa 36 rayos LiDAR que el robot físico no tiene | La autonomía real |
 | Compilar los `.ino` | No hay `arduino-cli` en la máquina | La primera verificación la hace quien los cargue |
 | Reconciliar el repo `IA` | Tiene contenido viejo de otra versión del proyecto | Que el push sea el proyecto real |

@@ -293,7 +293,7 @@ UNO D13 (TX) ──[1 kΩ]──┬── ESP32 GPIO16 (RX2)
 Divisor de tensión obligatorio: el UNO transmite a 5 V y el ESP32 tolera 3,3 V.
 ESP32 → UNO (GPIO17 → D12) va directo.
 
-### 6.2 El entorno del simulador (V5)
+### 6.2 El entorno del simulador (V7)
 
 ```
 Observación: 74 números
@@ -439,6 +439,7 @@ Estas están resueltas. Si alguien las vuelve a tocar, se rompe.
 | `SubprocVecEnv` con 2+ hijos | `0xC0000005` en `reset()` | Usar `DummyVecEnv` |
 | `rich` con stdout redirigido | Se bloquea | `progress_bar=False` |
 | `torch.set_num_threads` alto en inferencia | 1,5 s por paso | 1 hilo en inferencia, núcleos−2 en entrenamiento |
+| El LSTM de esta build de torch con rollout largo | `0xC0000005` dentro de `torch.nn.modules.rnn.forward` y en el `backward` de `ppo_recurrent.py`, sin traceback de Python. Medido: cae con 6 hilos y con 2, con 4 entornos y con 2. Una iteración de 2048 pasos sí completa (55-80 s); la segunda ya no. Con `mkldnn` apagado no crashea pero se cuelga | No pelear: el cerebro que va al robot es el reactivo. El PPO queda para cuando se cambie de máquina o de build de torch |
 | `COV_ENABLE_RGB_AXES` en PyBullet 3.2.7 | No existe, tira excepción | `getattr(p, "COV_ENABLE_RGB_AXES", None)` |
 | Un proceso GUI colgado | Deja ventana huérfana y bloquea el siguiente arranque | El `.bat` limpia antes de lanzar |
 | `PYTHONUTF8` sin definir | Un acento en un `print` mata el proceso | Siempre `PYTHONUTF8=1` |

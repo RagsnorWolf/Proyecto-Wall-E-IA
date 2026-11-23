@@ -80,14 +80,17 @@ de 72 rayos se pinta azul y el abanico de 36 que decide se pinta ámbar encima.
 
 | Archivo | Pasos | Estado |
 |---|---|---|
-| `walle_ppo_model_v7.zip` | — | No está en el repo: lo genera el entrenamiento. Observación de 74 |
+| `walle_ppo_model_v7.zip` | 620 000 | **El que usa la GUI.** Trasplantado del V6 a la observación de 74: las 8 columnas nuevas entran en cero y la política se comporta como el V6 |
 | `walle_ppo_model_v5_recovery.zip` | 1.3M heredados del V4 | Observación de 58: no carga con el entorno actual |
 | `walle_ppo_model_v4_lidar.zip` | 1 303 520 | La base del anterior. Navega bien |
-| `walle_ppo_model_v3_explorer.zip` | — | Histórico, por si hay que comparar |
+| `walle_ppo_model_v3_explorer.zip` | - | Histórico, por si hay que comparar |
 
-Los tres que vienen en el repo son de 58 números, así que con la observación de
-74 actual **ninguno encaja**: hasta que termine el primer entrenamiento V7, el
-modo PPO avisa y se queda en manual. Es lo esperado, no un fallo.
+El v7 no se entrenó desde cero: `transplant_v6_to_v7.py` copia los 19
+tensores que encajan del `walle_v6_620000_steps.zip` y ensancha las dos
+entradas del LSTM de `(1024, 66)` a `(1024, 74)`. Se pierde el
+entrenamiento de las 8 columnas nuevas, no las horas anteriores. Viene
+con su `_vecnormalize.pkl` al lado, o el crítico recibe un salto de
+escala.
 
 El cargador no tiene dimensiones escritas a mano: prueba los modelos de
 `models\` y de `models\checkpoints\`, y se queda con el primero cuya

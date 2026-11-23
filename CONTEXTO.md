@@ -276,7 +276,7 @@ docs(agente): puesta en marcha con Ollama
 |---|---|---|
 | **Sensor de distancia real** | La política usa 36 rayos LiDAR que el robot físico no tiene | La autonomía real |
 | Compilar los `.ino` | No hay `arduino-cli` en la máquina | Lo hace quien los cargue |
-| Entrenamiento largo | Murió con `0xC0000005` a los 20 000 pasos | Navegación fina |
+| Entrenamiento largo | Arranca, reanuda desde 620 000 y avanza; el LSTM de torch lo tumba con `0xC0000005` al alargar el rollout | Navegación fina |
 | Bajar a 38400 baudios si falla | `SoftwareSerial` + `Servo` a 57600 puede quedar justo | Enlace estable |
 
 **Sobre el sensor:** es la decisión técnica más importante que queda. Solo un
@@ -285,9 +285,17 @@ abanico de rayos que el simulador. Un HC-SR04 da un solo haz y obliga a
 reentrenar con otra observación. Va al ESP32 por un UART libre, como trama
 nueva: `WALLE/1 L <n> <d0>…`.
 
-**Sobre el entrenamiento:** el access violation es el mismo problema de PyBullet
-con múltiples instancias en el mismo proceso. Se salvaron los checkpoints hasta
-1 403 520 pasos. Falta una corrida que aguante.
+**Sobre el entrenamiento:** hay dos `access violation` distintos y conviene no
+confundirlos. El de PyBullet con múltiples instancias en el mismo proceso ya
+está resuelto: cada entorno tiene su `physicsClientId` y los checkpoints
+llegaron hasta 1 403 520 pasos en el V4/V5. El que queda es otro: el LSTM de
+esta build de torch se cae dentro de `torch.nn.modules.rnn.forward` —y en el
+`backward` de `ppo_recurrent.py`— cuando el rollout se alarga. Una iteración de
+2048 pasos completa en 55-80 s; la segunda ya no. Con 6 hilos y con 2, con 4
+entornos y con 2. Con `mkldnn` apagado no crashea pero se cuelga. No es el
+entorno: el mismo `env.step` corre a 107 pasos/s sin inmutarse. Por eso el
+cerebro que va al robot es el reactivo y el PPO queda para otra máquina o para
+otra build de torch.
 
 ---
 
