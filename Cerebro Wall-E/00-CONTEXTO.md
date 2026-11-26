@@ -66,6 +66,7 @@ Cerebro Wall-E\
   arduino_uno\walle_motors\     el sketch del UNO
   esp32\walle_bridge\           el sketch del ESP32 + config.h
   cerebro\walle_link.py         cliente UDP, el protocolo del lado PC
+  cerebro\servos.py             el único archivo que mueve los servos
   cerebro\test_link.py          pruebas del enlace, con --loopback
   cerebro\sim_link.py           adaptador para que el simulador maneje el robot
   cerebro\consola.py            control manual por teclado

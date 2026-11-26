@@ -36,6 +36,7 @@ El ida y vuelta es obligatorio: el PC no da una orden por buena hasta que el
 | `cerebro/test_link.py` | Prueba sin hardware (`--loopback`) o contra el robot real (`--host`). |
 | `cerebro/test_autonomo.py` | Prueba el cerebro autónomo con un enlace falso, sin robot. |
 | `cerebro/sim_link.py` | Adaptador para que el simulador PyBullet mande sus acciones por WiFi. |
+| `cerebro/servos.py` | **Servos**: el único archivo que mueve los 4 servos. Topes mecánicos, rampas, barridos y poses guardadas en JSON. Se puede correr solo. |
 | `WALL-E Cerebro Robot.bat` | **El lanzador.** Menú: manual, autónomo, pruebas, estado, IP. |
 | `Hablar con WALL-E.bat` | Atajo directo al modo manual, sin pasar por el menú. |
 | `protocolo.md` | Gramática exacta de los dos enlaces, incluida la trama de distancia. |
@@ -81,6 +82,34 @@ el robot físico no tiene. Correrla con un solo sonar sería inventar 35 número
 Cuando haya un LiDAR giratorio, `autonomo.py` es el archivo que se reemplaza por
 el cargador del modelo.
 
+### Servos, en un solo archivo
+
+`cerebro/servos.py` es la única puerta para mover servos. No habla con el UNO:
+usa `WalleLink`, así que hereda ACK, reintentos y timeout.
+
+```bat
+python cerebro\servos.py --host 192.168.1.50 estado
+python cerebro\servos.py --host 192.168.1.50 mover sonar 45
+python cerebro\servos.py --host 192.168.1.50 mover cuello 120 --suave
+python cerebro\servos.py --host 192.168.1.50 barrido sonar
+python cerebro\servos.py --host 192.168.1.50 probar
+python cerebro\servos.py --host 192.168.1.50 interactivo
+python cerebro\servos.py --dry probar          sin robot, imprime lo que haría
+```
+
+| Qué resuelve | Cómo |
+|---|---|
+| Nombres en vez de canales | `sonar`, `cuello`, `brazo_izq`, `brazo_der` |
+| Topes mecánicos | Cada canal tiene `minimo`/`maximo` en la tabla `CANALES`; el protocolo acepta 0..180, la mecánica no |
+| Servo montado al revés | `invertido=True` en el canal: pedís 120 y por el cable salen 60 |
+| Movimiento sin golpe | `mover_suave()` reparte el recorrido en pasos con pausa |
+| Barrido del sonar | `barrido()` con el tiempo de asentado entre pasos |
+| Poses | `guardar`, `pose` y `poses`; se guardan en `cerebro/servos_poses.json` |
+
+El UNO **no informa** en qué ángulo está un servo: `posicion()` devuelve el
+último ángulo mandado. Si alguien mueve una pieza con la mano, el módulo no se
+entera.
+
 ## Cableado
 
 ### ESP32 ↔ Arduino UNO (UART 57600 8N1)
@@ -117,10 +146,13 @@ del propio UNO.
 
 | UNO | Servo |
 |---|---|
-| D5 | Servo 0 (cuello) |
-| D6 | Servo 1 (brazo izq.) |
-| D9 | Servo 2 (brazo der.) |
-| D10 | Servo 3 (libre) |
+| D5 | Servo 0 — **sonar** (el HC-SR04 va montado arriba) |
+| D6 | Servo 1 — cuello |
+| D9 | Servo 2 — brazo izq. |
+| D10 | Servo 3 — brazo der. |
+
+Los nombres salen de `cerebro/servos.py`, que es la tabla canónica. Si cambia
+un pin, se cambia en `walle_motors.ino` y en ese archivo, nada más.
 
 Alimentar los servos con fuente aparte y unir la masa. Cuatro servos colgados
 del regulador del UNO lo reinician en el primer movimiento.
